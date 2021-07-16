@@ -1,19 +1,36 @@
 (mod    (ancestry
          spender
-         receiver-info)
+         receivers)
 
-    (defun generate-condition (ancestry spender receiver amount)
-        (list   CREATE_COIN
-                (hc-puzzle)
+    ;; assume no horizontal transfer for now
+    (defun ancestry-up-to (ancestry spender)
+        (if ancestry
+            (if (= (f ancestry) spender)
+                ancestry
+                (ancestry-up-to (r ancestry) spender)
+            )
+            (x)
+         )
     )
 
-    (defun generate-conditions (ancestry spender receiver-info)
-        ;;
+
+    (defun receiver-ancestries (spender-ancestry receivers)
+        (if receivers
+            (c
+                (c (f receivers) spender-ancestry)
+                (receiver-ancestries spender-ancestry (r receivers))
+            )
+            ()
+        )
+    )
+
+    (defun generate-ancestries (ancestry spender receivers)
+        (receiver-ancestries (ancestry-up-to ancestry spender) receivers)
     )
 
 
-    (generate-conditions
+    (generate-ancestries
         ancestry
-        sender
-        receiver-info)
+        spender
+        receivers)
 )
