@@ -1,0 +1,19 @@
+(mod    (ancestry
+         spender
+         receiver-info)
+
+    (defun generate-condition (ancestry spender receiver amount)
+        (list   CREATE_COIN
+                (hc-puzzle)
+    )
+
+    (defun generate-conditions (ancestry spender receiver-info)
+        ;;
+    )
+
+
+    (generate-conditions
+        ancestry
+        sender
+        receiver-info)
+)
