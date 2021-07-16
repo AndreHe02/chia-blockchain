@@ -9,12 +9,74 @@
       prev-subtotal           ;; included in announcement, prev-coin ASSERT_COIN_ANNOUNCEMENT will fail if wrong
     )
 
-     ;;;;; start library code
-     ;;;;; remember to restore this
-     ;;;;; end library code
+    ;; see p2_delegated...py for how to process ancestry list in python.
+    ;; maybe write another clvm to curry pks into
 
+     ;;;;;;;; LIBRARY CODE ;;;;;;;;
 
-     ;;;;; OUTPUT VALUE FOR CONDITION ;;;;;
+     (include condition_codes.clvm)
+
+     (defmacro assert items
+         (if (r items)
+             (list if (f items) (c assert (r items)) (q . (x)))
+             (f items)
+         )
+     )
+
+     ;; utility function used by `curry_args`
+     (defun fix_curry_args (items core)
+       (if items
+           (qq (c (q . (unquote (f items))) (unquote (fix_curry_args (r items) core))))
+           core
+       )
+     )
+
+     ; (curry_args sum (list 50 60)) => returns a function that is like (sum 50 60 ...)
+     (defun curry_args (func list_of_args) (qq (a (q . (unquote func)) (unquote (fix_curry_args list_of_args (q . 1))))))
+
+     ;; (curry sum 50 60) => returns a function that is like (sum 50 60 ...)
+     (defun curry (func . args) (curry_args func args))
+
+     (defun is-in-list (atom items)
+       ;; returns 1 iff `atom` is in the list of `items`
+       (if items
+         (if (= atom (f items))
+           1
+           (is-in-list atom (r items))
+         )
+         0
+       )
+     )
+
+     ;; hash a tree with escape values representing already-hashed subtrees
+     ;; This optimization can be useful if you know the puzzle hash of a sub-expression.
+     ;; You probably actually want to use `curry_and_hash` though.
+     (defun sha256tree_esc_list
+            (TREE LITERALS)
+            (if (l TREE)
+                (sha256 2 (sha256tree_esc_list (f TREE) LITERALS) (sha256tree_esc_list (r TREE) LITERALS))
+                (if (is-in-list TREE LITERALS)
+                    TREE
+                    (sha256 1 TREE)
+                )
+            )
+     )
+
+     ;; hash a tree with escape values representing already-hashed subtrees
+     ;; This optimization can be useful if you know the tree hash of a sub-expression.
+     (defun sha256tree_esc
+        (TREE . LITERAL)
+        (sha256tree_esc_list TREE LITERAL)
+     )
+
+     ; takes a lisp tree and returns the hash of it
+     (defun sha256tree1 (TREE)
+           (if (l TREE)
+               (sha256 2 (sha256tree1 (f TREE)) (sha256tree1 (r TREE)))
+               (sha256 1 TREE)))
+
+     ;;;;;;;; UTILITY FUNCTIONS ;;;;;;;;
+
      (defun-inline output-value-for-condition (condition)
        (if (= (f condition) CREATE_COIN)
          (f (r (r condition)))
@@ -22,7 +84,6 @@
        )
      )
 
-     ;;;;; TOTAL OUTPUT VALUE FOR A LIST OF CONDITIONS ;;;;;
      (defun output-totals (conditions)
        (if conditions
          (+ (output-value-for-condition (f conditions)) (output-totals (r conditions)))
@@ -30,12 +91,10 @@
        )
      )
 
-     ;; ID OF A COIN TRIPLET
      (defun coin-id-for-coin ((parent-id puzzle-hash amount))
        (sha256 parent-id puzzle-hash amount)
      )
 
-     ;; utility to fetch coin amount from coin
      (defun-inline input-amount-for-coin (coin)
        (f (r (r coin)))
      )
@@ -43,9 +102,6 @@
      (defun-inline puzzle-hash-for-coin (coin)
         (f (r coin))
      )
-
-
-     ;;;;;;;;;;;;;;;;;;;;;;;
 
      (defun hc-puzzle-hash ((mod-hash mod-hash-hash ancestry ancestry-hash)))
         (sha256tree_esc (curry mod-hash mod-hash-hash ancestry-hash)
@@ -55,9 +111,11 @@
         )
      )
 
-     (defun is-coin-valid (coin hc-hash)
-       (= (puzzle-hash-for-coin coin) hc-hash)
+     (defun x-if-x-else-y (x y)
+        (if x x y)
      )
+
+     ;;;;;;;; GENERATE VALUE-RELATED OUTPUT CONDITIONS ;;;;;;;;
 
      (defun make-create-coin-condition (mod-hash ancestry amount)
         (list   CREATE_COIN
@@ -83,10 +141,6 @@
             )
             ()
         )
-     )
-
-     (defun x-if-x-else-y (x y)
-        (if x x y)
      )
 
      ; assume no horizontal transfer for now
@@ -116,17 +170,17 @@
             amounts)
      )
 
+     ;;;;;;;; GENERATE VERIFICATION-RELATED OUTPUT CONDITIONS ;;;;;;;;
+
      (defun-inline create-assert-my-id (this-coin-info)
        (list ASSERT_MY_COIN_ID (coin-id-for-coin this-coin-info))
      )
 
-     ;; calculate the hash of an announcement
      (defun-inline calculate-annoucement-id (this-coin-info this-subtotal next-coin-info)
        ; NOTE: the next line containts a bug, as sha256tree1 ignores `this-subtotal`
        (sha256 (coin-id-for-coin next-coin-info) (sha256tree1 (list this-coin-info this-subtotal)))
      )
 
-     ;; create the `ASSERT_COIN_ANNOUNCEMENT` condition that ensures the next coin's announcement is correct
      (defun-inline create-assert-next-announcement-condition (this-coin-info this-subtotal next-coin-info)
        (list ASSERT_COIN_ANNOUNCEMENT
              (calculate-annoucement-id this-coin-info
@@ -136,7 +190,6 @@
        )
      )
 
-     ;; here we commit to I_{k-1} and S_k
      (defun-inline create-announcement-condition (prev-coin-info prev-subtotal)
        (list CREATE_COIN_ANNOUNCEMENT
              (sha256tree1 (list prev-coin-info prev-subtotal))
@@ -189,11 +242,13 @@
       )
       (assert
 
-        (is-coin-valid prev-coin hc-hash)
+        ; puzzle hash is uniquely determined by ancestry
 
-        (is-coin-valid this-coin hc-hash)
+        (= (puzzle-hash-for-coin prev-coin) hc-hash)
 
-        (is-coin-valid next-coin hc-hash)
+        (= (puzzle-hash-for-coin this-coin) hc-hash)
+
+        (= (puzzle-hash-for-coin next-coin) hc-hash)
 
         (generate-final-output-conditions
             prev-subtotal
@@ -202,6 +257,7 @@
             prev-coin
             this-coin
             next-coin
+            spender
             receivers
             amounts
         )
@@ -214,7 +270,7 @@
         spender
         receivers
         amounts
-        (generate-conditions mod-hash ancestry spender receivers amounts)
+        (generate-conditions mod-hash ancestry spender receivers amounts) ;HERE
         (hc-puzzle-hash (list mod-hash (sha256tree1 mod-hash) ancestry (sha256tree1 ancestry)))
         prev-coin
         this-coin

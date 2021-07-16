@@ -37,7 +37,6 @@ PublicKeyProgram = Union[bytes, Program]
 
 GROUP_ORDER = 0x73EDA753299D7D483339D80809A1D80553BDA402FFFE5BFEFFFFFFFF00000001
 
-
 def calculate_synthetic_offset(public_key: G1Element, hidden_puzzle_hash: bytes32) -> int:
     blob = hashlib.sha256(bytes(public_key) + hidden_puzzle_hash).digest()
     offset = int_from_bytes(blob)
