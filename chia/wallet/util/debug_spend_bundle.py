@@ -81,7 +81,6 @@ def debug_spend_bundle(spend_bundle, agg_sig_additional_data=bytes([3] * 32)) ->
                 msgs.append(m)
             print()
             cost, r = puzzle_reveal.run_with_cost(INFINITE_COST, solution)  # type: ignore
-            print(disassemble(r))
             print()
             if conditions and len(conditions) > 0:
                 print("grouped conditions:")

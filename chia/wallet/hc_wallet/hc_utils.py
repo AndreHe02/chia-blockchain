@@ -1,5 +1,5 @@
 import dataclasses
-from typing import List, Optional
+from typing import List, Optional, Tuple
 
 from blspy import G1Element, G2Element, AugSchemeMPL
 
@@ -10,8 +10,8 @@ from chia.types.coin_spend import CoinSpend
 from chia.types.spend_bundle import SpendBundle
 from chia.wallet.cc_wallet.cc_utils import subtotals_for_deltas
 from chia.wallet.puzzles.hc_loader import HC_MOD
-from chia.wallet.puzzles.test_hc import NULL_SIGNATURE
 
+NULL_SIGNATURE = G2Element()
 
 @dataclasses.dataclass
 class SpendableHC:
@@ -22,9 +22,11 @@ class SpendableHC:
 def hc_puzzle_for_lineage_program(mod_code, lineage: Program) -> Program:
     return mod_code.curry(mod_code.get_tree_hash(), lineage)
 
+
 def hc_puzzle_for_lineage(mod_code, lineage: List[G1Element]) -> Program:
     lineage_program = Program.to([bytes(public_key) for public_key in lineage])
     return hc_puzzle_for_lineage_program(mod_code, lineage_program)
+
 
 def hc_puzzle_hash_for_lineage_hash(mod_code, lineage_hash) -> bytes32:
     return mod_code.curry(mod_code.get_tree_hash(), lineage_hash).get_tree_hash(lineage_hash)
@@ -37,8 +39,10 @@ def bundle_for_spendable_hc_list(spendable_hc: SpendableHC):
     coin = spendable_hc.coin.as_list() #(spendable_hc.coin.as_list(), spendable_hc.ancestry_pks)
     return Program.to(coin)
 
+
 def spend_bundle_for_spendable_hcs(
     mod_code: Program,
+    spender: G1Element,
     spendable_hc_list: List[SpendableHC],
     receivers: List[List[G1Element]],
     amounts: List[List[int]],
@@ -68,7 +72,7 @@ def spend_bundle_for_spendable_hcs(
     for index in range(N):
         hc_spend_info = spendable_hc_list[index]
 
-        puzzle_reveal = hc_puzzle_for_lineage(mod_code, hc_spend_info.lineage)
+        puzzle_reveal = hc_puzzle_for_lineage_program(mod_code, hc_spend_info.lineage)
 
         prev_index = (index - 1) % N
         next_index = (index + 1) % N
@@ -76,8 +80,13 @@ def spend_bundle_for_spendable_hcs(
         my_bundle = bundles[index]
         next_bundle = bundles[next_index]
 
+        coin_receivers = [bytes(_) for _ in receivers[index]]
+        coin_output_amounts = amounts[index]
+        outputs = list(zip(coin_receivers, coin_output_amounts))
+
         solution = [
-            #construct zip(lineage, amounts) here
+            bytes(spender),
+            outputs,
             prev_bundle,
             my_bundle,
             next_bundle,
@@ -91,3 +100,49 @@ def spend_bundle_for_spendable_hcs(
         return SpendBundle(coin_spends, NULL_SIGNATURE)
     else:
         return SpendBundle(coin_spends, AugSchemeMPL.aggregate(sigs))
+
+
+def is_hc_mod(inner_f: Program):
+    return inner_f == HC_MOD
+
+
+def uncurry_hc(puzzle: Program) -> Optional[Tuple[Program, Program]]:
+    r = puzzle.uncurry()
+    if r is None:
+        return r
+    inner_f, args = r
+    if not is_hc_mod(inner_f):
+        return None
+
+    mod_hash, lineage = list(args.as_iter())
+    return mod_hash, lineage
+
+
+def spendable_hc_list_from_coin_spend(coin_spend: CoinSpend, hash_to_puzzle_f) -> List[SpendableHC]:
+    spendable_hc_list = []
+
+    return
+    '''
+    This scheme doesn't work. for HC we don't pass in the same puzzle
+    that is curried. we give zip(receivers, amounts), it curries in lineage
+    '''
+
+    coin = coin_spend.coin
+    puzzle = Program.from_bytes(bytes(coin_spend.puzzle_reveal))
+    r = uncurry_hc(puzzle)
+    if r:
+        mod_hash, lineage = r
+    else:
+        raise ValueError("cannot uncurry for input coin")
+
+    for new_coin in coin_spend.additions():
+        puzzle = hash_to_puzzle_f(new_coin.puzzle_hash)
+        if puzzle is None:
+            print("unrecognized puzzle")
+            continue
+        r = uncurry_hc(puzzle)
+        if r is None:
+            print("cannot uncurry for output coin")
+            continue
+
+        mod_hash, lineage = r
