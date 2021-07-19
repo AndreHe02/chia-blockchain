@@ -103,6 +103,7 @@ from clvm_tools.binutils import assemble
 
 if __name__ == "__main__":
     #print(make_list(1, 2))
-    Program.from_bytes(b"(c 1 (c 2 ()))")
+    #Program.from_bytes(b"(c 1 (c 2 ()))")
+    print("imported HCMOD")
     pass
     #main()

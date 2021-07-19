@@ -1,18 +1,15 @@
-(mod (mod-hash                ;; curried in
-      ancestry            ;; curried into puzzle
-      spender              ;; spender public key, determines level of control
-      receivers
-      amounts
-      prev-coin        ;; used in this coin's announcement, prev-coin ASSERT_COIN_ANNOUNCEMENT will fail if wrong
-      this-coin        ;; verified with ASSERT_MY_COIN_ID
-      next-coin        ;; used to generate ASSERT_COIN_ANNOUNCEMENT
+
+
+(mod (mod-hash                ;; curried into puzzle
+      lineage
+      conditions
+      prev-coin-bundle        ;; used in this coin's announcement, prev-coin ASSERT_COIN_ANNOUNCEMENT will fail if wrong
+      this-coin-bundle        ;; verified with ASSERT_MY_COIN_ID
+      next-coin-bundle        ;; used to generate ASSERT_COIN_ANNOUNCEMENT
       prev-subtotal           ;; included in announcement, prev-coin ASSERT_COIN_ANNOUNCEMENT will fail if wrong
     )
 
-    ;; see p2_delegated...py for how to process ancestry list in python.
-    ;; maybe write another clvm to curry pks into
-
-     ;;;;;;;; LIBRARY CODE ;;;;;;;;
+     ;;;;; start library code
 
      (include condition_codes.clvm)
 
@@ -75,112 +72,63 @@
                (sha256 2 (sha256tree1 (f TREE)) (sha256tree1 (r TREE)))
                (sha256 1 TREE)))
 
-     ;;;;;;;; UTILITY FUNCTIONS ;;;;;;;;
-
-     (defun-inline output-value-for-condition (condition)
-       (if (= (f condition) CREATE_COIN)
-         (f (r (r condition)))
-         0
-       )
-     )
-
-     (defun output-totals (conditions)
-       (if conditions
-         (+ (output-value-for-condition (f conditions)) (output-totals (r conditions)))
-         0
-       )
-     )
-
-     (defun coin-id-for-coin ((parent-id puzzle-hash amount))
-       (sha256 parent-id puzzle-hash amount)
-     )
-
-     (defun-inline input-amount-for-coin (coin)
-       (f (r (r coin)))
-     )
-
      (defun-inline puzzle-hash-for-coin (coin)
         (f (r coin))
      )
 
-     (defun hc-puzzle-hash ((mod-hash mod-hash-hash ancestry ancestry-hash)))
-        (sha256tree_esc (curry mod-hash mod-hash-hash ancestry-hash)
-                mod-hash
-                mod-hash-hash
-                ancestry-hash
-        )
+     ;;;;; end library code
+
+     ;; return the puzzle hash for a cc with the given `genesis-coin-checker-hash` & `inner-puzzle`
+     (defun hc-puzzle-hash ((mod-hash mod-hash-hash lineage lineage-hash))
+       (sha256tree_esc (curry mod-hash mod-hash-hash lineage-hash)
+                       mod-hash
+                       mod-hash-hash
+                       lineage-hash)
      )
 
-     (defun x-if-x-else-y (x y)
-        (if x x y)
+     ;; tweak `CREATE_COIN` condition by wrapping the puzzle hash, forcing it to be a cc
+     ;; prohibit CREATE_COIN_ANNOUNCEMENT
+     (defun-inline morph-condition (condition lineage-proof-parameters)
+       (if (= (f condition) CREATE_COIN)
+         (list CREATE_COIN
+               (hc-puzzle-hash lineage-proof-parameters (f (r condition)))
+               (f (r (r condition)))
+         )
+         (if (= (f condition) CREATE_COIN_ANNOUNCEMENT)
+           (x)
+           condition
+         )
+       )
      )
 
-     ;;;;;;;; GENERATE VALUE-RELATED OUTPUT CONDITIONS ;;;;;;;;
-
-     (defun make-create-coin-condition (mod-hash ancestry amount)
-        (list   CREATE_COIN
-                (hc-puzzle-hash (list mod-hash (sha256tree1 mod-hash) ancestry (sha256tree1 ancestry)))
-                amount)
+     ;; tweak all `CREATE_COIN` conditions, enforcing created coins to be ccs
+     (defun morph-conditions (conditions lineage-proof-parameters)
+       (if conditions
+         (c
+           (morph-condition (f conditions) lineage-proof-parameters)
+           (morph-conditions (r conditions) lineage-proof-parameters)
+         )
+         ()
+       )
      )
 
-     (defun make-create-coin-conditions (mod-hash ancestries amounts)
-        (if ancestries
-            (c
-                (make-create-coin-condition mod-hash (f ancestries) (f amounts))
-                (make-create-coin-conditions mod-hash (r ancestries) (r amounts))
-            )
-            ()
-        )
+     ;; given a coin triplet, return the id of the coin
+     (defun coin-id-for-coin ((parent-id puzzle-hash amount))
+       (sha256 parent-id puzzle-hash amount)
      )
 
-     (defun make-receiver-ancestries (spender-ancestry receivers)
-        (if receivers
-            (c
-                (c (f receivers) spender-ancestry)
-                (receiver-ancestries spender-ancestry (r receivers))
-            )
-            ()
-        )
+     ;; utility to fetch coin amount from coin
+     (defun-inline input-amount-for-coin (coin)
+       (f (r (r coin)))
      )
 
-     ; assume no horizontal transfer for now
-     (defun find-spender-ancestry (ancestry spender)
-        (if ancestry
-            (if (= (f ancestry) spender)
-                ; take the shorter ancestry if a spender is repeated
-                (x-if-x-else-y
-                    (find-spender-ancestry (r ancestry) spender)
-                    ancestry
-                )
-                (find-spender-ancestry (r ancestry) spender)
-            )
-            ()
-        )
-     )
-
-     (defun generate-conditions (mod-hash ancestry spender receivers amounts)
-        (make-create-coin-conditions
-            mod-hash
-            (make-receiver-ancestries
-                (x-if-x-else-y
-                    (find-spender-ancestry ancestry spender)
-                    (x "invalid spender")
-                )
-                receivers)
-            amounts)
-     )
-
-     ;;;;;;;; GENERATE VERIFICATION-RELATED OUTPUT CONDITIONS ;;;;;;;;
-
-     (defun-inline create-assert-my-id (this-coin-info)
-       (list ASSERT_MY_COIN_ID (coin-id-for-coin this-coin-info))
-     )
-
+     ;; calculate the hash of an announcement
      (defun-inline calculate-annoucement-id (this-coin-info this-subtotal next-coin-info)
        ; NOTE: the next line containts a bug, as sha256tree1 ignores `this-subtotal`
        (sha256 (coin-id-for-coin next-coin-info) (sha256tree1 (list this-coin-info this-subtotal)))
      )
 
+     ;; create the `ASSERT_COIN_ANNOUNCEMENT` condition that ensures the next coin's announcement is correct
      (defun-inline create-assert-next-announcement-condition (this-coin-info this-subtotal next-coin-info)
        (list ASSERT_COIN_ANNOUNCEMENT
              (calculate-annoucement-id this-coin-info
@@ -190,91 +138,117 @@
        )
      )
 
+     ;; here we commit to I_{k-1} and S_k
      (defun-inline create-announcement-condition (prev-coin-info prev-subtotal)
        (list CREATE_COIN_ANNOUNCEMENT
              (sha256tree1 (list prev-coin-info prev-subtotal))
        )
       )
 
-     (defun-inline create-assert-signature (spender receivers amounts)
-        (list   AGG_SIG_ME
-                spender
-                (sha256tree1 (list receivers amounts))
-        )
+     ;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+     ;; this function takes a condition and returns an integer indicating
+     ;; the value of all output coins created with CREATE_COIN. If it's not
+     ;; a CREATE_COIN condition, it returns 0.
+
+     (defun-inline output-value-for-condition (condition)
+       (if (= (f condition) CREATE_COIN)
+         (f (r (r condition)))
+         0
+       )
      )
 
+     ;; this function takes a list of conditions and returns an integer indicating
+     ;; the value of all output coins created with CREATE_COIN
+     (defun output-totals (conditions)
+       (if conditions
+         (+ (output-value-for-condition (f conditions)) (output-totals (r conditions)))
+         0
+       )
+     )
+
+     ;; ensure `this-coin-info` is correct by creating the `ASSERT_MY_COIN_ID` condition
+     (defun-inline create-assert-my-id (this-coin-info)
+       (list ASSERT_MY_COIN_ID (coin-id-for-coin this-coin-info))
+     )
+
+     ;; add three conditions to the list of morphed conditions:
+     ;; ASSERT_MY_COIN_ID for `this-coin-info`
+     ;; CREATE_COIN_ANNOUNCEMENT for my announcement
+     ;; ASSERT_COIN_ANNOUNCEMENT for the next coin's announcement
      (defun-inline generate-final-output-conditions
        (
          prev-subtotal
          this-subtotal
-         conditions
-         prev-coin
-         this-coin
-         next-coin
-         spender    ;; spender needs to sign receivers and amounts
-         receivers
-         amounts
+         morphed-conditions
+         prev-coin-info
+         this-coin-info
+         next-coin-info
        )
-       (c (create-assert-signature spender receivers amounts)
-           (c (create-assert-my-id this-coin)
-             (c (create-announcement-condition prev-coin prev-subtotal)
-               (c (create-assert-next-announcement-condition this-coin this-subtotal next-coin)
-                 conditions)
-             )
-           )
-        )
+       (c (create-assert-my-id this-coin-info)
+         (c (create-announcement-condition prev-coin-info prev-subtotal)
+           (c (create-assert-next-announcement-condition this-coin-info this-subtotal next-coin-info)
+             morphed-conditions)
+         )
+       )
       )
+
+     ;; return true iff the lineage proof is valid
+     ;; lineage-proof is of one of two forms:
+     ;;  (1 . (parent-parent-coin-id parent-inner-puzzle-hash parent-amount))
+     ;;  (0 . some-opaque-proof-passed-to-genesis-coin-checker)
+     ;; so the `f` value determines what kind of proof it is, and the `r` value is the proof
+
+     (defun-inline is-lineage-proof-valid (
+       lineage-proof-parameters coin-info)
+         (= (hc-puzzle-hash lineage-proof-parameters) (puzzle-hash-for-coin coin-info))
+     )
+
+     (defun is-bundle-valid (coin lineage-proof-parameters)
+       (is-lineage-proof-valid lineage-proof-parameters coin)
+     )
+
+
 
      ;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
      (defun main (
-         mod-hash
-         ancestry
-         spender
-         receivers
-         amounts
-         conditions
-         hc-hash
-         prev-coin
-         this-coin
-         next-coin
+         lineage-proof-parameters
+         inner-conditions
+         prev-coin-bundle
+         this-coin-bundle
+         next-coin-bundle
          prev-subtotal
       )
       (assert
+        ; ensure prev is a cc (is this really necessary?)
+        (is-bundle-valid prev-coin-bundle lineage-proof-parameters)
 
-        ; puzzle hash is uniquely determined by ancestry
+        ; ensure this is a cc (to ensure parent wasn't counterfeit)
+        (is-bundle-valid this-coin-bundle lineage-proof-parameters)
 
-        (= (puzzle-hash-for-coin prev-coin) hc-hash)
-
-        (= (puzzle-hash-for-coin this-coin) hc-hash)
-
-        (= (puzzle-hash-for-coin next-coin) hc-hash)
+        ; ensure next is a cc (to ensure its announcements can be trusted)
+        (is-bundle-valid next-coin-bundle lineage-proof-parameters)
 
         (generate-final-output-conditions
-            prev-subtotal
-            (+ prev-subtotal (- (input-amount-for-coin this-coin) (output-totals conditions)))
-            conditions
-            prev-coin
-            this-coin
-            next-coin
-            spender
-            receivers
-            amounts
+          prev-subtotal
+          ; the expression on the next line calculates `this-subtotal` by adding the delta to `prev-subtotal`
+          (+ prev-subtotal (- (input-amount-for-coin this-coin-bundle) (output-totals inner-conditions)))
+          (morph-conditions inner-conditions lineage-proof-parameters)
+          prev-coin-bundle
+          this-coin-bundle
+          next-coin-bundle
         )
       )
     )
 
     (main
-        mod-hash
-        ancestry
-        spender
-        receivers
-        amounts
-        (generate-conditions mod-hash ancestry spender receivers amounts) ;HERE
-        (hc-puzzle-hash (list mod-hash (sha256tree1 mod-hash) ancestry (sha256tree1 ancestry)))
-        prev-coin
-        this-coin
-        next-coin
+        ;; cache some stuff: output conditions, and lineage-proof-parameters
+        (list mod-hash (sha256tree1 mod-hash) lineage (sha256tree1 lineage))
+        conditions
+        prev-coin-bundle
+        this-coin-bundle
+        next-coin-bundle
         prev-subtotal
     )
 )
