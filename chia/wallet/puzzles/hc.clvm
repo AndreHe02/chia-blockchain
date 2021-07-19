@@ -1,8 +1,10 @@
 
 
 (mod (mod-hash                ;; curried into puzzle
-      lineage
-      conditions
+      lineage                 ;; curried in
+      spender
+      outputs
+      ; conditions
       prev-coin-bundle        ;; used in this coin's announcement, prev-coin ASSERT_COIN_ANNOUNCEMENT will fail if wrong
       this-coin-bundle        ;; verified with ASSERT_MY_COIN_ID
       next-coin-bundle        ;; used to generate ASSERT_COIN_ANNOUNCEMENT
@@ -86,32 +88,6 @@
                        lineage-hash)
      )
 
-     ;; tweak `CREATE_COIN` condition by wrapping the puzzle hash, forcing it to be a cc
-     ;; prohibit CREATE_COIN_ANNOUNCEMENT
-     (defun-inline morph-condition (condition lineage-proof-parameters)
-       (if (= (f condition) CREATE_COIN)
-         (list CREATE_COIN
-               (hc-puzzle-hash lineage-proof-parameters (f (r condition)))
-               (f (r (r condition)))
-         )
-         (if (= (f condition) CREATE_COIN_ANNOUNCEMENT)
-           (x)
-           condition
-         )
-       )
-     )
-
-     ;; tweak all `CREATE_COIN` conditions, enforcing created coins to be ccs
-     (defun morph-conditions (conditions lineage-proof-parameters)
-       (if conditions
-         (c
-           (morph-condition (f conditions) lineage-proof-parameters)
-           (morph-conditions (r conditions) lineage-proof-parameters)
-         )
-         ()
-       )
-     )
-
      ;; given a coin triplet, return the id of the coin
      (defun coin-id-for-coin ((parent-id puzzle-hash amount))
        (sha256 parent-id puzzle-hash amount)
@@ -172,6 +148,13 @@
        (list ASSERT_MY_COIN_ID (coin-id-for-coin this-coin-info))
      )
 
+     (defun-inline create-agg-sig-me (sig-parameters)
+        (list AGG_SIG_ME
+              (f sig-parameters)
+              (sha256tree1 (f (r sig-parameters)))
+        )
+     )
+
      ;; add three conditions to the list of morphed conditions:
      ;; ASSERT_MY_COIN_ID for `this-coin-info`
      ;; CREATE_COIN_ANNOUNCEMENT for my announcement
@@ -180,24 +163,22 @@
        (
          prev-subtotal
          this-subtotal
-         morphed-conditions
+         sig-parameters
+         inner-conditions
          prev-coin-info
          this-coin-info
          next-coin-info
        )
-       (c (create-assert-my-id this-coin-info)
-         (c (create-announcement-condition prev-coin-info prev-subtotal)
-           (c (create-assert-next-announcement-condition this-coin-info this-subtotal next-coin-info)
-             morphed-conditions)
-         )
-       )
+           (c (create-agg-sig-me sig-parameters)
+               (c (create-assert-my-id this-coin-info)
+                 (c (create-announcement-condition prev-coin-info prev-subtotal)
+                   (c (create-assert-next-announcement-condition this-coin-info this-subtotal next-coin-info)
+                     inner-conditions)
+                 )
+               )
+           )
       )
 
-     ;; return true iff the lineage proof is valid
-     ;; lineage-proof is of one of two forms:
-     ;;  (1 . (parent-parent-coin-id parent-inner-puzzle-hash parent-amount))
-     ;;  (0 . some-opaque-proof-passed-to-genesis-coin-checker)
-     ;; so the `f` value determines what kind of proof it is, and the `r` value is the proof
 
      (defun-inline is-lineage-proof-valid (
        lineage-proof-parameters coin-info)
@@ -214,6 +195,7 @@
 
      (defun main (
          lineage-proof-parameters
+         sig-parameters
          inner-conditions
          prev-coin-bundle
          this-coin-bundle
@@ -234,7 +216,8 @@
           prev-subtotal
           ; the expression on the next line calculates `this-subtotal` by adding the delta to `prev-subtotal`
           (+ prev-subtotal (- (input-amount-for-coin this-coin-bundle) (output-totals inner-conditions)))
-          (morph-conditions inner-conditions lineage-proof-parameters)
+          sig-parameters
+          inner-conditions
           prev-coin-bundle
           this-coin-bundle
           next-coin-bundle
@@ -242,10 +225,54 @@
       )
     )
 
+    ;; no horizontal transfer for now
+    (defun get-spender-lineage (lineage spender)
+        (if lineage
+            (if (= (f lineage) spender)
+                (list spender)
+                (c (f lineage) (get-spender-lineage (r lineage) spender))
+            )
+            (x "invalid spender")
+        )
+    )
+
+    (defun append-to-list (list item)
+        (if list
+            (c (f list) (append-to-list (r list) item))
+            (list item)
+        )
+    )
+
+    (defun make-condition-2 (mod-hash output-lineage amount)
+        (list CREATE_COIN
+              (hc-puzzle-hash (list mod-hash (sha256tree1 mod-hash) output-lineage (sha256tree1 output-lineage)))
+              amount
+        )
+    )
+
+    (defun make-condition (mod-hash spender-lineage output)
+        (make-condition-2 (mod-hash (append-to-list spender-lineage (f output)) (f (r output))))
+    )
+
+    (defun make-conditions-2 (mod-hash spender-lineage outputs)
+        (if outputs
+            (c
+                (make-condition spender-lineage (f outputs))
+                (make-conditions-2 spender-lineage (r outputs))
+            )
+            ()
+        )
+    )
+
+    (defun make-conditions (mod-hash lineage spender outputs)
+        (make-conditions-2 mod-hash (get-spender-lineage lineage spender) outputs)
+    )
+
     (main
         ;; cache some stuff: output conditions, and lineage-proof-parameters
         (list mod-hash (sha256tree1 mod-hash) lineage (sha256tree1 lineage))
-        conditions
+        (list spender outputs)
+        (make-conditions mod-hash lineage spender outputs)
         prev-coin-bundle
         this-coin-bundle
         next-coin-bundle

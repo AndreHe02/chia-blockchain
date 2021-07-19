@@ -11,8 +11,8 @@ from chia.util.ints import uint64
 
 from chia.wallet.hc_wallet.hc_utils import (
     HC_MOD,
-    hc_puzzle_for_ancestry,
-    hc_puzzle_hash_for_ancestry_hash,
+    hc_puzzle_for_lineage,
+    hc_puzzle_hash_for_lineage_hash,
     bundle_for_spendable_hc_list,
     # spendable_hc_list_from_coin_spend,
 )
@@ -54,13 +54,13 @@ def generate_farmed_coin(
 def issue_hc_from_farmed_coin(
         mod_code: Program,
         block_id: int,
-        ancestry_hash: bytes32,
+        lineage_hash: bytes32,
         amount: int
 ) -> Tuple[Program, SpendBundle]:
     farmed_puzzle = ANYONE_CAN_SPEND_PUZZLE
     farmed_puzzle_hash = farmed_puzzle.get_tree_hash()
     farmed_coin = generate_farmed_coin(block_id, farmed_puzzle_hash, amount=uint64(amount))
-    minted_hc_puzzle_hash = hc_puzzle_hash_for_ancestry_hash(mod_code, ancestry_hash)
+    minted_hc_puzzle_hash = hc_puzzle_hash_for_lineage_hash(mod_code, lineage_hash)
     output_conditions = [[ConditionOpcode.CREATE_COIN, minted_hc_puzzle_hash, farmed_coin.amount]]
     # solution is just the conditions
     solution = Program.to(output_conditions)
@@ -79,31 +79,8 @@ def solution_for_pay_to_any(puzzle_hash_amount_pairs: List[Tuple[bytes32, int]])
 
 
 def main():
-    #mod_code = HC_MOD
-    pass
-
-from chia.wallet.chialisp import (
-    apply,
-    args,
-    cons,
-    eval,
-    fail,
-    first,
-    is_zero,
-    make_if,
-    make_list,
-    nth,
-    quote,
-    rest,
-    sexp,
-)
-
-from clvm_tools.binutils import assemble
-
+    issue_hc_from_farmed_coin(HC_MOD, )
 
 if __name__ == "__main__":
-    #print(make_list(1, 2))
     #Program.from_bytes(b"(c 1 (c 2 ()))")
-    print("imported HCMOD")
-    pass
-    #main()
+    main()
