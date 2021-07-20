@@ -13,6 +13,7 @@ from chia.wallet.puzzles.hc_loader import HC_MOD
 
 NULL_SIGNATURE = G2Element()
 
+
 @dataclasses.dataclass
 class SpendableHC:
     coin: Coin
@@ -36,19 +37,18 @@ def hc_puzzle_hash_for_lineage_hash(mod_code, lineage_hash) -> bytes32:
 # is equal to an HC hash with the same ancestry curried in (no cross spending)
 
 def bundle_for_spendable_hc_list(spendable_hc: SpendableHC):
-    coin = spendable_hc.coin.as_list() #(spendable_hc.coin.as_list(), spendable_hc.ancestry_pks)
+    coin = spendable_hc.coin.as_list()  # (spendable_hc.coin.as_list(), spendable_hc.ancestry_pks)
     return Program.to(coin)
 
 
 def spend_bundle_for_spendable_hcs(
-    mod_code: Program,
-    spender: G1Element,
-    spendable_hc_list: List[SpendableHC],
-    receivers: List[List[G1Element]],
-    amounts: List[List[int]],
-    sigs: Optional[List[G2Element]] = [],
+        mod_code: Program,
+        spender: G1Element,
+        spendable_hc_list: List[SpendableHC],
+        receivers: List[List[G1Element]],
+        amounts: List[List[int]],
+        sigs: Optional[List[G2Element]] = [],
 ) -> SpendBundle:
-
     N = len(spendable_hc_list)
 
     if len(receivers) != N or len(amounts) != N:
@@ -72,7 +72,8 @@ def spend_bundle_for_spendable_hcs(
     for index in range(N):
         hc_spend_info = spendable_hc_list[index]
 
-        puzzle_reveal = hc_puzzle_for_lineage_program(mod_code, hc_spend_info.lineage)
+        puzzle_reveal = hc_puzzle_for_lineage_program(mod_code,
+                                                      Program.to([bytes(_) for _ in hc_spend_info.lineage]))
 
         prev_index = (index - 1) % N
         next_index = (index + 1) % N
@@ -100,6 +101,27 @@ def spend_bundle_for_spendable_hcs(
         return SpendBundle(coin_spends, NULL_SIGNATURE)
     else:
         return SpendBundle(coin_spends, AugSchemeMPL.aggregate(sigs))
+
+
+def signed_spend_bundle(
+        mod_code: Program,
+        spender: G1Element,
+        spender_sk: G1Element,
+        genesis_challenge,
+        spendable_hc_list: List[SpendableHC],
+        receivers: List[List[G1Element]],
+        amounts: List[List[int]]
+) -> SpendBundle:
+    signatures = []
+    for r, a in zip(receivers, amounts):
+        outputs = Program.to(list(zip(r, a)))
+        msg = (
+            outputs.get_tree_hash()
+            + spendable_hc_list[0].coin.get_hash()
+            + genesis_challenge
+        )
+        signatures.append(AugSchemeMPL.sign(spender_sk, msg))
+    return spend_bundle_for_spendable_hcs(mod_code, spender, spendable_hc_list, receivers, amounts, signatures)
 
 
 def is_hc_mod(inner_f: Program):
