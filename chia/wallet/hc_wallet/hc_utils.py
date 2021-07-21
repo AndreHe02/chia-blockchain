@@ -26,7 +26,7 @@ def hc_puzzle_for_lineage_program(mod_code, lineage: Program) -> Program:
 
 
 def hc_puzzle_for_lineage(mod_code, lineage: List[G1Element]) -> Program:
-    lineage_program = Program.to([bytes(public_key) for public_key in lineage])
+    lineage_program = Program.to(lineage)
     return hc_puzzle_for_lineage_program(mod_code, lineage_program)
 
 
@@ -46,7 +46,7 @@ def spend_bundle_for_spendable_hcs(
         mod_code: Program,
         spender: G1Element,
         spendable_hc_list: List[SpendableHC],
-        receivers: List[List[G1Element]],
+        receivers: List[List[List[G1Element]]],
         amounts: List[List[uint64]],
         sigs: Optional[List[G2Element]] = [],
 ) -> SpendBundle:
@@ -74,7 +74,7 @@ def spend_bundle_for_spendable_hcs(
         hc_spend_info = spendable_hc_list[index]
 
         puzzle_reveal = hc_puzzle_for_lineage_program(mod_code,
-                                                      Program.to([bytes(_) for _ in hc_spend_info.lineage]))
+                                                      Program.to(hc_spend_info.lineage))
 
         prev_index = (index - 1) % N
         next_index = (index + 1) % N
@@ -82,12 +82,12 @@ def spend_bundle_for_spendable_hcs(
         my_bundle = bundles[index]
         next_bundle = bundles[next_index]
 
-        coin_receivers = [bytes(_) for _ in receivers[index]]
+        coin_receivers = receivers[index]
         coin_output_amounts = amounts[index]
         outputs = list(zip(coin_receivers, coin_output_amounts))
 
         solution = [
-            bytes(spender),
+            spender,
             outputs,
             prev_bundle,
             my_bundle,
@@ -110,7 +110,7 @@ def signed_spend_bundle(
         spender_sk: G1Element,
         genesis_challenge,
         spendable_hc_list: List[SpendableHC],
-        receivers: List[List[G1Element]],
+        receivers: List[List[List[G1Element]]],
         amounts: List[List[uint64]]
 ) -> SpendBundle:
     signatures = []

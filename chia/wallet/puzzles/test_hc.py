@@ -106,7 +106,7 @@ def test_spend_to_two():
 
     total_minted = 30
 
-    lineage = Program.to([bytes(pk)])
+    lineage = Program.to([pk])
     lineage_hash = lineage.get_tree_hash()
     spend_bundle = issue_hc_from_farmed_coin(
         mod_code, 1, lineage_hash, total_minted
@@ -117,7 +117,7 @@ def test_spend_to_two():
     # when they are added to the lineage of a coin
     coin = spend_bundle.coin_spends[0].additions()[0]
     spendable_hc_list = [SpendableHC(coin, [pk])]
-    receivers = [[pk2, pk3]]
+    receivers = [[[pk, pk2], [pk, pk3]]]
     amounts = [[10, 20]]
     spend_bundle = signed_spend_bundle(
         mod_code, pk, sk, TEST_GENESIS_CHALLENGE, spendable_hc_list, receivers, amounts
@@ -143,7 +143,7 @@ def test_secondhand_spend():
     coin = spend_bundle.coin_spends[0].additions()[0]
     spendable_hc_list = [SpendableHC(coin, [pk])]
 
-    receivers = [[pk2, pk3]]
+    receivers = [[[pk, pk2], [pk, pk3]]]
     amounts = [[10, 20]]
     spend_bundle = signed_spend_bundle(
         mod_code, pk, sk, TEST_GENESIS_CHALLENGE, spendable_hc_list, receivers, amounts
@@ -154,7 +154,7 @@ def test_secondhand_spend():
     coin = spend_bundle.coin_spends[0].additions()[0]
     spendable_hc_list = [SpendableHC(coin, [pk, pk2])]
 
-    receivers = [[pk3]]
+    receivers = [[[pk2, pk3]]]
     amounts = [[10]]
     spend_bundle = signed_spend_bundle(
         mod_code, pk2, sk2, TEST_GENESIS_CHALLENGE, spendable_hc_list, receivers, amounts
@@ -182,7 +182,7 @@ def test_genesis_clawback():
     coin = spend_bundle.coin_spends[0].additions()[0]
     spendable_hc_list = [SpendableHC(coin, [pk])]
 
-    receivers = [[pk2, pk3]]
+    receivers = [[[pk, pk2], [pk, pk3]]]
     amounts = [[10, 20]]
     spend_bundle = signed_spend_bundle(
         mod_code, pk, sk, TEST_GENESIS_CHALLENGE, spendable_hc_list, receivers, amounts
@@ -192,7 +192,7 @@ def test_genesis_clawback():
 
     coin = spend_bundle.coin_spends[0].additions()[0]
     spendable_hc_list = [SpendableHC(coin, [pk, pk2])]
-    receivers = [[pk3]]
+    receivers = [[[pk2, pk3]]]
     amounts = [[10]]
     spend_bundle = signed_spend_bundle(
         mod_code, pk2, sk2, TEST_GENESIS_CHALLENGE, spendable_hc_list, receivers, amounts
@@ -204,7 +204,7 @@ def test_genesis_clawback():
 
     coin = spend_bundle.coin_spends[0].additions()[0]
     spendable_hc_list = [SpendableHC(coin, [pk, pk2, pk3])]
-    receivers = [[pk]]
+    receivers = [[[pk]]]
     amounts = [[10]]
     spend_bundle = signed_spend_bundle(
         mod_code, pk, sk, TEST_GENESIS_CHALLENGE, spendable_hc_list, receivers, amounts
@@ -212,7 +212,7 @@ def test_genesis_clawback():
     spend_bundle.debug()
 
     coin_spend = spend_bundle.coin_spends[0]
-    assert_output_lineages(coin_spend, [[pk, pk]])
+    assert_output_lineages(coin_spend, [[pk]])
 
 
 def test_secondhand_clawback():
@@ -232,7 +232,7 @@ def test_secondhand_clawback():
     coin = spend_bundle.coin_spends[0].additions()[0]
     spendable_hc_list = [SpendableHC(coin, [pk])]
 
-    receivers = [[pk2, pk3]]
+    receivers = [[[pk, pk2], [pk, pk3]]]
     amounts = [[10, 20]]
     spend_bundle = signed_spend_bundle(
         mod_code, pk, sk, TEST_GENESIS_CHALLENGE, spendable_hc_list, receivers, amounts
@@ -242,7 +242,7 @@ def test_secondhand_clawback():
 
     coin = spend_bundle.coin_spends[0].additions()[0]
     spendable_hc_list = [SpendableHC(coin, [pk, pk2])]
-    receivers = [[pk3]]
+    receivers = [[[pk2, pk3]]]
     amounts = [[10]]
     spend_bundle = signed_spend_bundle(
         mod_code, pk2, sk2, TEST_GENESIS_CHALLENGE, spendable_hc_list, receivers, amounts
@@ -254,7 +254,7 @@ def test_secondhand_clawback():
 
     coin = spend_bundle.coin_spends[0].additions()[0]
     spendable_hc_list = [SpendableHC(coin, [pk, pk2, pk3])]
-    receivers = [[pk2]]
+    receivers = [[[pk2]]]
     amounts = [[10]]
     spend_bundle = signed_spend_bundle(
         mod_code, pk2, sk2, TEST_GENESIS_CHALLENGE, spendable_hc_list, receivers, amounts
@@ -262,18 +262,16 @@ def test_secondhand_clawback():
     spend_bundle.debug()
 
     coin_spend = spend_bundle.coin_spends[0]
-    assert_output_lineages(coin_spend, [[pk, pk2, pk2]])
+    assert_output_lineages(coin_spend, [[pk, pk2]])
 
 
 def main():
-    # test_spend_to_two()
-    # test_secondhand_spend()
-    # test_genesis_clawback()
-    #test_secondhand_clawback()
-    sk, pk = generate_test_keys(MNEMONIC1)
-    sk2, pk2 = generate_test_keys(MNEMONIC2)
-    sk3, pk3 = generate_test_keys(MNEMONIC3)
-    print(G1Element.from_bytes(bytes(pk)))
+    print(HC_MOD)
+    test_spend_to_two()
+    test_secondhand_spend()
+    test_genesis_clawback()
+    test_secondhand_clawback()
+
 
 if __name__ == "__main__":
     main()

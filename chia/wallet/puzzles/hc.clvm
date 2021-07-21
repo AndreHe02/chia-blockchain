@@ -226,7 +226,7 @@
     (defun get-spender-lineage (lineage spender)
         (if lineage
             (if (= (f lineage) spender)
-                (list spender)
+                (list )
                 (c (f lineage) (get-spender-lineage (r lineage) spender))
             )
             (x "invalid spender")
@@ -240,6 +240,13 @@
         )
     )
 
+    (defun concat-after-list (ls1 ls2)
+        (if ls1
+            (c (f ls1) (concat-after-list (r ls1) ls2))
+            ls2
+        )
+    )
+
     (defun helper-make-condition (mod-hash output-lineage amount)
         (list CREATE_COIN
               (hc-puzzle-hash (list mod-hash (sha256tree1 mod-hash) output-lineage (sha256tree1 output-lineage)))
@@ -247,8 +254,8 @@
         )
     )
 
-    (defun make-condition (mod-hash spender-lineage (receiver . amount))
-        (helper-make-condition mod-hash (append-to-list spender-lineage receiver) amount)
+    (defun make-condition (mod-hash spender-lineage (receiver-chain . amount))
+        (helper-make-condition mod-hash (concat-after-list spender-lineage receiver-chain) amount)
     )
 
     (defun helper-make-conditions (mod-hash spender-lineage outputs)
