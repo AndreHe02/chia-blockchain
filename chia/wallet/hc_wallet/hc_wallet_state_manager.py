@@ -7,8 +7,8 @@ class HCWalletStateManager:
 
     """
     Version of WalletStateManager where we use a fixed public key
-    Repeating puzzle hashes are fine because the HC contact does not
-    contain hidden spends.
+    HC contact does not contain hidden spends
+    so security depends entirely on the aggregated signature
 
     Maybe not needed. just have HCWallet always use index 0
     """

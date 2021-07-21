@@ -269,8 +269,11 @@ def main():
     # test_spend_to_two()
     # test_secondhand_spend()
     # test_genesis_clawback()
-    test_secondhand_clawback()
-
+    #test_secondhand_clawback()
+    sk, pk = generate_test_keys(MNEMONIC1)
+    sk2, pk2 = generate_test_keys(MNEMONIC2)
+    sk3, pk3 = generate_test_keys(MNEMONIC3)
+    print(G1Element.from_bytes(bytes(pk)))
 
 if __name__ == "__main__":
     main()

@@ -683,6 +683,9 @@ class WalletStateManager:
             if coin.parent_coin_info in farmer_rewards:
                 is_fee_reward = True
 
+
+            # TODO catch relevant HC puzzles here
+
             info = await self.puzzle_store.wallet_info_for_puzzle_hash(coin.puzzle_hash)
             if info is not None:
                 wallet_id, wallet_type = info

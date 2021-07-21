@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from typing import Optional
 
 from blspy import G1Element
 
@@ -19,3 +20,4 @@ class DerivationRecord:
     pubkey: G1Element
     wallet_type: WalletType
     wallet_id: uint32
+

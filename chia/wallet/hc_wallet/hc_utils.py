@@ -8,6 +8,7 @@ from chia.types.blockchain_format.program import Program
 from chia.types.blockchain_format.sized_bytes import bytes32
 from chia.types.coin_spend import CoinSpend
 from chia.types.spend_bundle import SpendBundle
+from chia.util.ints import uint64
 from chia.wallet.cc_wallet.cc_utils import subtotals_for_deltas
 from chia.wallet.puzzles.hc_loader import HC_MOD
 
@@ -46,7 +47,7 @@ def spend_bundle_for_spendable_hcs(
         spender: G1Element,
         spendable_hc_list: List[SpendableHC],
         receivers: List[List[G1Element]],
-        amounts: List[List[int]],
+        amounts: List[List[uint64]],
         sigs: Optional[List[G2Element]] = [],
 ) -> SpendBundle:
     N = len(spendable_hc_list)
@@ -110,7 +111,7 @@ def signed_spend_bundle(
         genesis_challenge,
         spendable_hc_list: List[SpendableHC],
         receivers: List[List[G1Element]],
-        amounts: List[List[int]]
+        amounts: List[List[uint64]]
 ) -> SpendBundle:
     signatures = []
     for r, a in zip(receivers, amounts):
