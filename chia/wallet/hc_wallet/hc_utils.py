@@ -30,6 +30,10 @@ def hc_puzzle_for_lineage(mod_code, lineage: List[G1Element]) -> Program:
     return hc_puzzle_for_lineage_program(mod_code, lineage_program)
 
 
+def hc_puzzle_hash_for_lineage(mod_code, lineage: List[G1Element]) -> Program:
+    return hc_puzzle_hash_for_lineage_hash(mod_code, Program.to(lineage).get_tree_hash())
+
+
 def hc_puzzle_hash_for_lineage_hash(mod_code, lineage_hash) -> bytes32:
     return mod_code.curry(mod_code.get_tree_hash(), lineage_hash).get_tree_hash(lineage_hash)
 
@@ -73,8 +77,7 @@ def spend_bundle_for_spendable_hcs(
     for index in range(N):
         hc_spend_info = spendable_hc_list[index]
 
-        puzzle_reveal = hc_puzzle_for_lineage_program(mod_code,
-                                                      Program.to(hc_spend_info.lineage))
+        puzzle_reveal = hc_puzzle_for_lineage(mod_code, hc_spend_info.lineage)
 
         prev_index = (index - 1) % N
         next_index = (index + 1) % N
@@ -114,14 +117,15 @@ def signed_spend_bundle(
         amounts: List[List[uint64]]
 ) -> SpendBundle:
     signatures = []
-    for r, a in zip(receivers, amounts):
+    for r, a, c in zip(receivers, amounts, spendable_hc_list):
         outputs = Program.to(list(zip(r, a)))
         msg = (
             outputs.get_tree_hash()
-            + spendable_hc_list[0].coin.get_hash()
+            + c.coin.get_hash()
             + genesis_challenge
         )
         signatures.append(AugSchemeMPL.sign(spender_sk, msg))
+
     return spend_bundle_for_spendable_hcs(mod_code, spender, spendable_hc_list, receivers, amounts, signatures)
 
 

@@ -11,7 +11,8 @@ from chia.types.blockchain_format.program import Program
 from chia.types.blockchain_format.sized_bytes import bytes32
 from chia.types.peer_info import PeerInfo
 from chia.util.ints import uint16, uint32, uint64
-from chia.wallet.hc_wallet.hc_utils import hc_puzzle_hash_for_lineage_hash
+from chia.wallet.hc_wallet.hc_utils import hc_puzzle_hash_for_lineage_hash, hc_puzzle_for_lineage, \
+    hc_puzzle_hash_for_lineage
 from chia.wallet.hc_wallet.hc_wallet import HCWallet
 from chia.wallet.puzzles.hc_loader import HC_MOD
 from chia.wallet.transaction_record import TransactionRecord
@@ -67,36 +68,11 @@ class TestHCWallet:
 
         await time_out_assert(15, wallet.get_confirmed_balance, funds)
 
+        # GENESIS
         hc_wallet: HCWallet = await HCWallet.create(wallet_node.wallet_state_manager, wallet)
         await hc_wallet.create_new_hc(uint64(100))
 
-    @pytest.mark.asyncio
-    async def test_balance(self, two_wallet_nodes):
-        num_blocks = 3
-        full_nodes, wallets = two_wallet_nodes
-        full_node_api = full_nodes[0]
-        full_node_server = full_node_api.server
-        wallet_node, server_2 = wallets[0]
-        wallet = wallet_node.wallet_state_manager.main_wallet
-
-        ph = await wallet.get_new_puzzlehash()
-
-        await server_2.start_client(PeerInfo("localhost", uint16(full_node_server._port)), None)
-        for i in range(1, num_blocks):
-            await full_node_api.farm_new_transaction_block(FarmNewBlockProtocol(ph))
-
-        funds = sum(
-            [
-                calculate_pool_reward(uint32(i)) + calculate_base_farmer_reward(uint32(i))
-                for i in range(1, num_blocks - 1)
-            ]
-        )
-
-        await time_out_assert(15, wallet.get_confirmed_balance, funds)
-
-        hc_wallet: HCWallet = await HCWallet.create(wallet_node.wallet_state_manager, wallet)
-        await hc_wallet.create_new_hc(uint64(100))
-
+        # PUSH GENESIS TRANSACTION
         tx_queue: List[TransactionRecord] = await wallet_node.wallet_state_manager.tx_store.get_not_sent()
         tx_record = tx_queue[0]
         await time_out_assert(
@@ -109,11 +85,90 @@ class TestHCWallet:
 
         await time_out_assert(15, hc_wallet.get_unconfirmed_balance, correct_balance)
 
+        # WAIT FOR CONFIRMATION
         for i in range(1, num_blocks):
             await full_node_api.farm_new_transaction_block(FarmNewBlockProtocol(32 * b"0"))
 
         await time_out_assert(15, hc_wallet.get_confirmed_balance, correct_balance)
         await time_out_assert(15, hc_wallet.get_unconfirmed_balance, correct_balance)
 
+
+    @pytest.mark.asyncio
+    async def test_hc_spend(self, two_wallet_nodes):
+        num_blocks = 3
+        full_nodes, wallets = two_wallet_nodes
+        full_node_api = full_nodes[0]
+        full_node_server = full_node_api.server
+        wallet_node, server_2 = wallets[0]
+        wallet_node_2, server_3 = wallets[1]
+        wallet = wallet_node.wallet_state_manager.main_wallet
+        wallet2 = wallet_node_2.wallet_state_manager.main_wallet
+
+        ph = await wallet.get_new_puzzlehash()
+
+        await server_2.start_client(PeerInfo("localhost", uint16(full_node_server._port)), None)
+        await server_3.start_client(PeerInfo("localhost", uint16(full_node_server._port)), None)
+
+        for i in range(1, num_blocks):
+            await full_node_api.farm_new_transaction_block(FarmNewBlockProtocol(ph))
+
+        funds = sum(
+            [
+                calculate_pool_reward(uint32(i)) + calculate_base_farmer_reward(uint32(i))
+                for i in range(1, num_blocks - 1)
+            ]
+        )
+
+        await time_out_assert(15, wallet.get_confirmed_balance, funds)
+
+        # GENESIS
+        hc_wallet: HCWallet = await HCWallet.create(wallet_node.wallet_state_manager, wallet)
+        await hc_wallet.create_new_hc(uint64(100))
+
+        # PUSH GENESIS TRANSACTION
+        tx_queue: List[TransactionRecord] = await wallet_node.wallet_state_manager.tx_store.get_not_sent()
+        tx_record = tx_queue[0]
+        await time_out_assert(
+            15, tx_in_pool, True, full_node_api.full_node.mempool_manager, tx_record.spend_bundle.name()
+        )
+
+        lineage_hash = Program.to([bytes(hc_wallet.public_key)]).get_tree_hash()
+        puzzle_hash = hc_puzzle_hash_for_lineage_hash(HC_MOD, lineage_hash)
+        correct_balance = {puzzle_hash: uint64(100)}
+
+        await time_out_assert(15, hc_wallet.get_unconfirmed_balance, correct_balance)
+
+        # WAIT FOR CONFIRMATION
+        for i in range(1, num_blocks):
+            await full_node_api.farm_new_transaction_block(FarmNewBlockProtocol(32 * b"0"))
+
+        await time_out_assert(15, hc_wallet.get_confirmed_balance, correct_balance)
+        await time_out_assert(15, hc_wallet.get_unconfirmed_balance, correct_balance)
+
+        hc_wallet_2: HCWallet = await HCWallet.create(wallet_node_2.wallet_state_manager, wallet2)
+        pk = hc_wallet.public_key
+        pk2 = hc_wallet_2.public_key
+
+        await hc_wallet_2.register_lineage([pk, pk2])
+
+        tx_record = await hc_wallet.generate_signed_transactions(
+            [50], [pk2], [False], hc_puzzle_hash_for_lineage(HC_MOD, [pk])
+        )
+        await wallet.wallet_state_manager.add_pending_transaction(tx_record)
+
+        await time_out_assert(
+            15, tx_in_pool, True, full_node_api.full_node.mempool_manager, tx_record.spend_bundle.name()
+        )
+
+        for i in range(1, num_blocks):
+            await full_node_api.farm_new_transaction_block(FarmNewBlockProtocol(ph))
+
+        sender_ph = hc_puzzle_hash_for_lineage(HC_MOD, [pk])
+        receiver_ph = hc_puzzle_hash_for_lineage(HC_MOD, [pk, pk2])
+        wallet1_balance = {sender_ph: 50}
+        wallet2_balance = {receiver_ph: 50}
+
+        await time_out_assert(15, hc_wallet.get_confirmed_balance, wallet1_balance)
+        await time_out_assert(15, hc_wallet_2.get_confirmed_balance, wallet2_balance)
 
 

@@ -165,7 +165,7 @@
          this-coin-info
          next-coin-info
        )
-           (c (create-agg-sig-me sig-parameters)
+          (c (create-agg-sig-me sig-parameters)
                (c (create-assert-my-id this-coin-info)
                  (c (create-announcement-condition prev-coin-info prev-subtotal)
                    (c (create-assert-next-announcement-condition this-coin-info this-subtotal next-coin-info)
@@ -173,7 +173,7 @@
                    )
                  )
                )
-           )
+          )
       )
 
 

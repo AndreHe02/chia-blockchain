@@ -35,7 +35,7 @@ from chia.wallet.cc_wallet.cc_utils import (
 )
 from chia.wallet.derivation_record import DerivationRecord
 from chia.wallet.hc_wallet.hc_utils import hc_puzzle_hash_for_lineage_hash, spend_bundle_for_spendable_hcs, \
-    signed_spend_bundle, SpendableHC
+    signed_spend_bundle, SpendableHC, hc_puzzle_hash_for_lineage
 from chia.wallet.puzzles.genesis_by_coin_id_with_0 import (
     create_genesis_or_zero_coin_checker,
     genesis_coin_id_for_genesis_coin_checker,
@@ -137,7 +137,7 @@ class HCWallet:
         self.log = logging.getLogger(__name__)
 
         self.wallet_state_manager = wallet_state_manager
-        self.public_key = wallet_state_manager.get_public_key(0)
+        self.public_key = wallet_state_manager.private_key.get_g1()
         self.registered_lineages = {}
 
         self.wallet_info = await wallet_state_manager.user_store.create_wallet(
@@ -210,7 +210,7 @@ class HCWallet:
         lineage_puzzle = Program.to([bytes(_) for _ in genesis_lineage])
         minted_hc_puzzle_hash = hc_puzzle_hash_for_lineage_hash(HC_MOD, lineage_puzzle.get_tree_hash())
 
-        await self.register_lineage(minted_hc_puzzle_hash, genesis_lineage)
+        await self.register_lineage(genesis_lineage)
 
         tx_record: TransactionRecord = await self.standard_wallet.generate_signed_transaction(
             amount, minted_hc_puzzle_hash, uint64(0), origin_id, coins
@@ -218,7 +218,7 @@ class HCWallet:
         assert tx_record.spend_bundle is not None
         return tx_record.spend_bundle
 
-    async def register_lineage(self, hc_puzzle_hash: bytes32, lineage: List[G1Element]):
+    async def register_lineage_(self, hc_puzzle_hash: bytes32, lineage: List[G1Element]):
         last: Optional[uint32] = await self.wallet_state_manager.puzzle_store.get_last_derivation_path_for_wallet(
             self.id())
         if last is not None:
@@ -237,6 +237,12 @@ class HCWallet:
 
         self.registered_lineages[hc_puzzle_hash] = lineage
 
+    async def register_lineage(self, lineage: List[G1Element]):
+        await self.register_lineage_(
+            hc_puzzle_hash_for_lineage(HC_MOD, lineage),
+            lineage
+        )
+
     async def get_max_send_amount_for_ph(self, puzzle_hash, records=None):
         spendable: List[WalletCoinRecord] = list(
             await self.get_spendable_coins_for_ph(puzzle_hash, records)
@@ -248,7 +254,7 @@ class HCWallet:
             coin = spendable[0].coin
             tx = await self.generate_signed_transactions(
                 # this should be a fake spend to self
-                [coin.amount], [self.public_key], puzzle_hash, coins={coin}, ignore_max_send_amount=True
+                [coin.amount], [self.public_key], [False], puzzle_hash, coins={coin}, ignore_max_send_amount=True
             )
             program: BlockGenerator = simple_solution_generator(tx.spend_bundle)
             # npc contains names of the coins removed, puzzle_hashes and their spend conditions
@@ -340,12 +346,14 @@ class HCWallet:
     async def generate_signed_transactions(
             self,
             amounts: List[uint64],
-            receivers: List[G1Element],
+            receivers_: List[G1Element],
+            horizontal: List[bool],
             from_puzzle_hash: bytes32,
             fee: uint64 = uint64(0),
             coins: Set[Coin] = None,
             ignore_max_send_amount: bool = False,
     ) -> TransactionRecord:
+
         outgoing_amount = uint64(sum(amounts))
         total_outgoing = outgoing_amount + fee
 
@@ -363,13 +371,21 @@ class HCWallet:
         total_amount = sum([x.amount for x in selected_coins])
         change = total_amount - total_outgoing
 
+        receivers = []
+        for r, h in zip(receivers_, horizontal):
+            if h:
+                receivers.append([r])
+            else:
+                receivers.append([self.public_key, r])
+
+
         # change for self
-        receivers.append(self.public_key)
+        receivers.append([self.public_key])
         amounts.append(change)
 
         # have the first coin produce the outputs
-        receivers_bundle: List[List[G1Element]] = [[] for _ in range(len(selected_coins))]
-        amounts_bundle: List[List[uint64]] = [[] for _ in range(len(selected_coins))]
+        receivers_bundle: List[List[List[G1Element]]] = [[[self.public_key]] for coin in selected_coins]
+        amounts_bundle: List[List[uint64]] = [[coin.amount] for coin in selected_coins]
         receivers_bundle[0] = receivers
         amounts_bundle[0] = amounts
 
@@ -392,12 +408,7 @@ class HCWallet:
         )
 
         # take the first one, mimicking cc_wallet
-        self_lineage = self.registered_lineages[from_puzzle_hash]
-        to_lineage = self_lineage.copy()
-        to_lineage.append(receivers[0])
-        to_puzzle_hash = hc_puzzle_hash_for_lineage_hash(
-            HC_MOD,
-            Program.to([bytes(_) for _ in to_lineage]).get_tree_hash())
+        to_puzzle_hash = spend_bundle.additions()[0].puzzle_hash
 
         return TransactionRecord(
             confirmed_at_height=uint32(0),
