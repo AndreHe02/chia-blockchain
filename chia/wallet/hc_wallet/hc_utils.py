@@ -114,7 +114,8 @@ def signed_spend_bundle(
         genesis_challenge,
         spendable_hc_list: List[SpendableHC],
         receivers: List[List[List[G1Element]]],
-        amounts: List[List[uint64]]
+        amounts: List[List[uint64]],
+        extra_signatures: List[G2Element] = []
 ) -> SpendBundle:
     signatures = []
     for r, a, c in zip(receivers, amounts, spendable_hc_list):
@@ -125,7 +126,7 @@ def signed_spend_bundle(
             + genesis_challenge
         )
         signatures.append(AugSchemeMPL.sign(spender_sk, msg))
-
+    signatures.extend(extra_signatures)
     return spend_bundle_for_spendable_hcs(mod_code, spender, spendable_hc_list, receivers, amounts, signatures)
 
 

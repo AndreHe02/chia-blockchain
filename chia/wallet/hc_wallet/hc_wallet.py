@@ -185,14 +185,14 @@ class HCWallet:
         )
 
         for record in unconfirmed_tx:
-            for coin in record.additions:
+            for coin in record.spend_bundle.additions():
                 ph = coin.puzzle_hash
                 if ph not in self.registered_lineages:  # this is not a hc
                     continue
                 if ph not in confirmed:
                     confirmed[ph] = uint64(0)
                 confirmed[ph] += coin.amount
-            for coin in record.removals:
+            for coin in record.spend_bundle.removals():
                 ph = coin.puzzle_hash
                 if ph not in self.registered_lineages:
                     continue
@@ -347,19 +347,20 @@ class HCWallet:
     async def generate_signed_transactions(
             self,
             amounts: List[uint64],
-            receivers_: List[G1Element],
-            horizontal: List[bool],
+            receivers: List[G1Element],
             from_puzzle_hash: bytes32,
             fee: uint64 = uint64(0),
             coins: Set[Coin] = None,
             ignore_max_send_amount: bool = False,
+            extra_signatures: List[G2Element] = []
+            # admin might just want to sign all relevant coins
     ) -> TransactionRecord:
 
         if from_puzzle_hash not in self.registered_lineages:
             raise ValueError(f"Unrecognized puzzle hash {from_puzzle_hash}")
 
         outgoing_amount = uint64(sum(amounts))
-        total_outgoing = outgoing_amount + fee
+        total_outgoing = outgoing_amount #+ fee
 
         # change this to use XCH as fee later
         if not ignore_max_send_amount:
@@ -374,13 +375,6 @@ class HCWallet:
 
         total_amount = sum([x.amount for x in selected_coins])
         change = total_amount - total_outgoing
-
-        receivers = []
-        for r, h in zip(receivers_, horizontal):
-            if h:
-                receivers.append([r])
-            else:
-                receivers.append([self.public_key, r])
 
         # this is to make a change coin with the same lineage as its parent
         spender_index = 0
@@ -414,7 +408,8 @@ class HCWallet:
             self.wallet_state_manager.constants.AGG_SIG_ME_ADDITIONAL_DATA,
             spendable_hc_list,
             receivers_bundle,
-            amounts_bundle
+            amounts_bundle,
+            extra_signatures
         )
 
         # take the first one, mimicking cc_wallet
@@ -440,5 +435,4 @@ class HCWallet:
 
     def puzzle_for_pk(self, pubkey) -> Program:
         # this doesn't actually do anything
-        hc_puzzle: Program = HC_MOD
-        return hc_puzzle
+        return HC_MOD
