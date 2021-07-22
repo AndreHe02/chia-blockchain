@@ -165,6 +165,7 @@ class HCWallet:
             record_list = await self.wallet_state_manager.coin_store.get_unspent_coins_for_wallet(self.id())
 
         amounts = {}
+
         for record in record_list:
             ph = record.coin.puzzle_hash
             if ph not in amounts:
@@ -354,6 +355,9 @@ class HCWallet:
             ignore_max_send_amount: bool = False,
     ) -> TransactionRecord:
 
+        if from_puzzle_hash not in self.registered_lineages:
+            raise ValueError(f"Unrecognized puzzle hash {from_puzzle_hash}")
+
         outgoing_amount = uint64(sum(amounts))
         total_outgoing = outgoing_amount + fee
 
@@ -378,9 +382,15 @@ class HCWallet:
             else:
                 receivers.append([self.public_key, r])
 
-
-        # change for self
-        receivers.append([self.public_key])
+        # this is to make a change coin with the same lineage as its parent
+        spender_index = 0
+        spent_coin_lineage = self.registered_lineages[from_puzzle_hash]
+        for i in range(len(spent_coin_lineage)):
+            if spent_coin_lineage[i] == self.public_key:
+                spender_index = i
+                break
+        change_coin_receiver = spent_coin_lineage[spender_index:]
+        receivers.append(change_coin_receiver)
         amounts.append(change)
 
         # have the first coin produce the outputs
