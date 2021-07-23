@@ -5,7 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Dict, List, Optional, Tuple
 
-from blspy import PrivateKey, G1Element
+from blspy import PrivateKey, G1Element, G2Element
 
 from chia.cmds.init_funcs import check_keys
 from chia.consensus.block_rewards import calculate_base_farmer_reward
@@ -16,6 +16,7 @@ from chia.server.outbound_message import NodeType, make_msg
 from chia.simulator.simulator_protocol import FarmNewBlockProtocol
 from chia.types.blockchain_format.coin import Coin
 from chia.types.blockchain_format.sized_bytes import bytes32
+from chia.types.coin_spend import CoinSpend
 from chia.util.bech32m import decode_puzzle_hash, encode_puzzle_hash
 from chia.util.byte_types import hexstr_to_bytes
 from chia.util.ints import uint32, uint64
@@ -928,6 +929,30 @@ class WalletRpcApi:
     # Hierarchical Coins: Transactions, Offers, and Clawbacks
     ##########################################################################################
 
+    @staticmethod
+    def hash_to_str(ph: bytes32) -> str:
+        return str(bytes(ph).hex())
+
+    @staticmethod
+    def key_to_str(k: G1Element) -> str:
+        return str(bytes(k).hex())
+
+    @staticmethod
+    def sig_to_str(k: G2Element) -> str:
+        return str(bytes(k).hex())
+
+    @staticmethod
+    def str_to_hash(s: str) -> bytes32:
+        return bytes32.from_bytes(bytes.fromhex(s))
+
+    @staticmethod
+    def str_to_key(s: str) -> G1Element:
+        return G1Element.from_bytes(bytes.fromhex(s))
+
+    @staticmethod
+    def str_to_sig(s: str) -> G2Element:
+        return G2Element.from_bytes(bytes.fromhex(s))
+
     async def hc_create_wallet(self, request):
         assert self.service.wallet_state_manager is not None
         wallet_state_manager = self.service.wallet_state_manager
@@ -955,7 +980,7 @@ class WalletRpcApi:
         assert self.service.wallet_state_manager is not None
         wallet_id = uint32(int(request["wallet_id"]))
         lineage_: List[str] = request["lineage"]
-        lineage: List[G1Element] = [G1Element.from_bytes(eval(_)) for _ in lineage_]
+        lineage: List[G1Element] = [self.str_to_key(_) for _ in lineage_]
         hc_wallet: HCWallet = self.service.wallet_state_manager.wallets[wallet_id]
         assert hc_wallet.type == WalletType.HC_WALLET
         async with self.service.wallet_state_manager.lock:
@@ -965,14 +990,14 @@ class WalletRpcApi:
     async def hc_lineage_for_puzzle_hash(self, request):
         assert self.service.wallet_state_manager is not None
         wallet_id = uint32(int(request["wallet_id"]))
-        ph = bytes32(request["puzzle_hash"])
+        ph = self.str_to_hash(request["puzzle_hash"])
         hc_wallet: HCWallet = self.service.wallet_state_manager.wallets[wallet_id]
         assert hc_wallet.type == WalletType.HC_WALLET
         async with self.service.wallet_state_manager.lock:
-            lineage_fingerprints = hc_wallet.puzzle_hash_to_lineage_fingerprints(ph)
+            lineage = hc_wallet.registered_lineages[ph]
         return {
             "wallet_id": wallet_id,
-            "lineage": lineage_fingerprints
+            "lineage": [self.key_to_str(key) for key in lineage]
         }
 
     async def hc_get_public_key(self, request):
@@ -984,8 +1009,8 @@ class WalletRpcApi:
             public_key = hc_wallet.public_key
             fingerprint = public_key.get_fingerprint()
         return {
-            "public_key": str(bytes(public_key)),
-            "fingerprint": fingerprint
+            "public_key": self.key_to_str(public_key),
+            "fingerprint": str(fingerprint)
         }
 
     async def hc_get_balance(self, request):
@@ -995,8 +1020,11 @@ class WalletRpcApi:
         assert hc_wallet.type == WalletType.HC_WALLET
         async with self.service.wallet_state_manager.lock:
             unspent_records = await self.service.wallet_state_manager.coin_store.get_unspent_coins_for_wallet(wallet_id)
-            balance = await hc_wallet.get_confirmed_balance(unspent_records)
-            spendable_balance = await hc_wallet.get_spendable_balance(unspent_records)
+            balance_ = await hc_wallet.get_confirmed_balance(unspent_records)
+            spendable_balance_ = await hc_wallet.get_spendable_balance(unspent_records)
+
+            balance = {self.hash_to_str(h): balance_[h] for h in balance_}
+            spendable_balance = {self.hash_to_str(h): spendable_balance_[h] for h in spendable_balance_}
 
         wallet_balance = {
             "wallet_id": wallet_id,
@@ -1006,17 +1034,138 @@ class WalletRpcApi:
         return {"wallet_balance": wallet_balance}
 
     async def hc_send_transaction(self, request):
-        pass
+        assert self.service.wallet_state_manager is not None
+
+        if await self.service.wallet_state_manager.synced() is False:
+            raise ValueError("Wallet needs to be fully synced before sending transactions")
+
+        if int(time.time()) < self.service.constants.INITIAL_FREEZE_END_TIMESTAMP:
+            end_date = datetime.fromtimestamp(float(self.service.constants.INITIAL_FREEZE_END_TIMESTAMP))
+            raise ValueError(f"No transactions before: {end_date}")
+
+        wallet_id = int(request["wallet_id"])
+        hc_wallet: HCWallet = self.service.wallet_state_manager.wallets[wallet_id]
+        assert hc_wallet.type == WalletType.HC_WALLET
+
+        if not isinstance(request["amount"], int) or not isinstance(request["fee"], int):
+            raise ValueError("An integer amount or fee is required (too many decimals)")
+
+        amount: uint64 = uint64(request["amount"])
+        receiver: G1Element = self.str_to_key(request["receiver"])
+        horizontal: bool = bool(request["horizontal"])
+        from_puzzle_hash: bytes32 = self.str_to_hash(request["from_puzzle_hash"])
+
+        async with self.service.wallet_state_manager.lock:
+            tx: TransactionRecord = await hc_wallet.generate_simple_transaction([amount], [receiver], [horizontal],
+                                                                                from_puzzle_hash, 0)
+            await hc_wallet.standard_wallet.push_transaction(tx)
+
+        return {
+            "transaction": tx,
+            "transaction_id": tx.name
+        }
 
     async def hc_make_multisig_offer(self, request):
-        pass
+        assert self.service.wallet_state_manager is not None
+
+        if await self.service.wallet_state_manager.synced() is False:
+            raise ValueError("Wallet needs to be fully synced before sending transactions")
+
+        if int(time.time()) < self.service.constants.INITIAL_FREEZE_END_TIMESTAMP:
+            end_date = datetime.fromtimestamp(float(self.service.constants.INITIAL_FREEZE_END_TIMESTAMP))
+            raise ValueError(f"No transactions before: {end_date}")
+
+        wallet_id = int(request["wallet_id"])
+        hc_wallet: HCWallet = self.service.wallet_state_manager.wallets[wallet_id]
+        assert hc_wallet.type == WalletType.HC_WALLET
+
+        if not isinstance(request["amount"], int) or not isinstance(request["fee"], int):
+            raise ValueError("An integer amount or fee is required (too many decimals)")
+
+        amount: uint64 = uint64(request["amount"])
+        receiver: G1Element = self.str_to_key(request["receiver"])
+        horizontal: bool = bool(request["horizontal"])
+        from_puzzle_hash: bytes32 = self.str_to_hash(request["from_puzzle_hash"])
+        extra_signers: List[G1Element] = [self.str_to_key(_) for _ in request["extra_signers"]]
+
+        async with self.service.wallet_state_manager.lock:
+            coin_spends, msgs, signatures = \
+                await hc_wallet.generate_unsigned_transaction([amount], [receiver], [horizontal],
+                                                              from_puzzle_hash, extra_signers)
+
+        return {
+            "coin_spends": coin_spends,
+            "msgs": msgs,
+            "signatures": [self.sig_to_str(_) for _ in signatures]
+        }
 
     async def hc_clawback(self, request):
-        pass
+        assert self.service.wallet_state_manager is not None
+
+        if await self.service.wallet_state_manager.synced() is False:
+            raise ValueError("Wallet needs to be fully synced before sending transactions")
+
+        if int(time.time()) < self.service.constants.INITIAL_FREEZE_END_TIMESTAMP:
+            end_date = datetime.fromtimestamp(float(self.service.constants.INITIAL_FREEZE_END_TIMESTAMP))
+            raise ValueError(f"No transactions before: {end_date}")
+
+        wallet_id = int(request["wallet_id"])
+        hc_wallet: HCWallet = self.service.wallet_state_manager.wallets[wallet_id]
+        assert hc_wallet.type == WalletType.HC_WALLET
+
+        if not isinstance(request["amount"], int) or not isinstance(request["fee"], int):
+            raise ValueError("An integer amount or fee is required (too many decimals)")
+
+        amount: uint64 = uint64(request["amount"])
+        receiver: G1Element = hc_wallet.public_key
+        horizontal: bool = True
+        from_puzzle_hash: bytes32 = self.str_to_hash(request["from_puzzle_hash"])
+
+        async with self.service.wallet_state_manager.lock:
+            coin_spends, msgs, signatures = \
+                await hc_wallet.generate_unsigned_transaction([amount], [receiver], [horizontal],
+                                                              from_puzzle_hash, [])
+
+        return {
+            "coin_spends": coin_spends,
+            "msgs": msgs,
+            "signatures": [self.sig_to_str(_) for _ in signatures]
+        }
 
     async def hc_sign_spends(self, request):
-        pass
+        assert self.service.wallet_state_manager is not None
 
+        wallet_id = int(request["wallet_id"])
+        hc_wallet: HCWallet = self.service.wallet_state_manager.wallets[wallet_id]
+        msgs: List[bytes] = request(["msgs"])
+        assert hc_wallet.type == WalletType.HC_WALLET
+
+        async with self.service.wallet_state_manager.lock:
+            signatures = hc_wallet.sign_messages(msgs)
+
+        return {
+            "signatures": [self.sig_to_str(_) for _ in signatures]
+        }
+
+    async def hc_push_signed_transaction(self, request):
+        assert self.service.wallet_state_manager is not None
+
+        wallet_id = int(request["wallet_id"])
+        hc_wallet: HCWallet = self.service.wallet_state_manager.wallets[wallet_id]
+        coin_spends: List[CoinSpend] = request["coin_spends"]
+        signatures: List[G2Element] = [self.str_to_sig(_) for _ in request["signatures"]]
+        extra_signatures: List[G2Element] = [self.str_to_sig(_) for _ in request["extra_signatures"]]
+
+        assert hc_wallet.type == WalletType.HC_WALLET
+
+        async with self.service.wallet_state_manager.lock:
+            tx: TransactionRecord = await hc_wallet.generate_signed_transaction(coin_spends, signatures, extra_signatures)
+            await hc_wallet.standard_wallet.push_transaction(tx)
+
+        return {
+            "transaction": tx,
+            "transaction_id": tx.name
+        }
 
     ##########################################################################################
     # Distributed Identities

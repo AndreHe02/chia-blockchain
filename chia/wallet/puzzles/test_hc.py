@@ -267,10 +267,11 @@ def test_secondhand_clawback():
 
 def main():
     sk, pk = generate_test_keys(MNEMONIC1)
-    hash = HC_MOD.get_tree_hash()
+    hash = pk
     print(str(bytes(hash)))
-    print(
-        bytes32.from_bytes(bytes(hash)))
+    print(str(bytes(hash).hex()))
+    s = str(bytes(hash).hex())
+    print(G1Element.from_bytes()bytes.fromhex(s))
 
     # test_spend_to_two()
     # test_secondhand_spend()
