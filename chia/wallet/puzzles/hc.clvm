@@ -4,11 +4,11 @@
       lineage                 ;; curried in
       spender
       outputs
+      extra-signers
       prev-coin-bundle        ;; used in this coin's announcement, prev-coin ASSERT_COIN_ANNOUNCEMENT will fail if wrong
       this-coin-bundle        ;; verified with ASSERT_MY_COIN_ID
       next-coin-bundle        ;; used to generate ASSERT_COIN_ANNOUNCEMENT
       prev-subtotal           ;; included in announcement, prev-coin ASSERT_COIN_ANNOUNCEMENT will fail if wrong
-      extra-signers        ;; for multisig offers
     )
 
      ;;;;; start library code
@@ -47,6 +47,9 @@
        )
      )
 
+     ;; hash a tree with escape values representing already-hashed subtrees
+     ;; This optimization can be useful if you know the puzzle hash of a sub-expression.
+     ;; You probably actually want to use `curry_and_hash` though.
      (defun sha256tree_esc_list
             (TREE LITERALS)
             (if (l TREE)
@@ -148,22 +151,6 @@
         (list AGG_SIG_ME (f sig_parameters) (f (r sig_parameters)))
      )
 
-     (defun make-extra-sig-conditions (signers msg)
-        (if signers
-           (c (list AGG_SIG_ME (f signers) msg)
-               (make-extra-sig-conditions (r signers) msg)
-           )
-           ()
-        )
-     )
-
-     (defun length (ls)
-        (if ls
-            (+ 1 (length (r ls)))
-            0
-        )
-     )
-
      ;; add three conditions to the list of morphed conditions:
      ;; ASSERT_MY_COIN_ID for `this-coin-info`
      ;; CREATE_COIN_ANNOUNCEMENT for my announcement
@@ -173,16 +160,14 @@
          prev-subtotal
          this-subtotal
          sig-parameters
+         extra-signers
          inner-conditions
          prev-coin-info
          this-coin-info
          next-coin-info
-         extra-signers
        )
-
-        ;; clawbacks should require genesis signature
-
-        (concat (make-extra-sig-conditions extra-signers (f (r sign-parameters)))
+       (concat-after-list
+          (make-extra-agg-sig-conditions extra-signers (f (r sig-parameters)))
           (c (create-agg-sig-me sig-parameters)
                (c (create-assert-my-id this-coin-info)
                  (c (create-announcement-condition prev-coin-info prev-subtotal)
@@ -195,6 +180,15 @@
         )
       )
 
+     (defun make-extra-agg-sig-conditions (extra-signers outputs)
+        (if extra-signers
+            (c
+                (list AGG_SIG_ME (f extra-signers) outputs)
+                (make-extra-agg-sig-conditions (r extra-signers) outputs)
+            )
+            ()
+        )
+     )
 
      (defun-inline is-lineage-proof-valid (
        lineage-proof-parameters coin-info)
@@ -213,11 +207,11 @@
          lineage-proof-parameters
          sig-parameters
          inner-conditions
+         extra-signers
          prev-coin-bundle
          this-coin-bundle
          next-coin-bundle
          prev-subtotal
-         extra-signers
       )
       (assert
         ; ensure prev is a cc (is this really necessary?)
@@ -234,11 +228,11 @@
           ; the expression on the next line calculates `this-subtotal` by adding the delta to `prev-subtotal`
           (+ prev-subtotal (- (input-amount-for-coin this-coin-bundle) (output-totals inner-conditions)))
           sig-parameters
+          extra-signers
           inner-conditions
           prev-coin-bundle
           this-coin-bundle
           next-coin-bundle
-          extra-signers
         )
       )
     )
@@ -250,9 +244,9 @@
                     (list )
                     (c (f lineage) (get-spender-lineage (r lineage) spender (+ depth 1)))
                 )
-                (x "not permitted to spend")
+                (x "not permitted to spend")    ;; third-hand owner (regular employee) is not permitted to spend
             )
-            (x "invalid spender")
+            (x "invalid spender")   ;; no such owner
         )
     )
 
@@ -263,12 +257,20 @@
         )
     )
 
+    (defun last-item (ls)
+        (if (r ls)
+            (last-item (r ls))
+            (f ls)
+        )
+    )
+
     (defun concat-after-list (ls1 ls2)
         (if ls1
             (c (f ls1) (concat-after-list (r ls1) ls2))
             ls2
         )
     )
+
 
     (defun helper-make-condition (mod-hash output-lineage amount)
         (list CREATE_COIN
@@ -291,19 +293,17 @@
         )
     )
 
-    (defun last-item (ls)
-        (if (r ls)
-            (last-item (r ls))
-            (f ls)
-        )
-    )
-
-    (defun make-conditions (mod-hash lineage spender outputs)
-        (if (= spender (last-item lineage))
+    (defun make-conditions (mod-hash lineage spender outputs extra-signers)
+         ;; is this a normal spend or clawback?
+         (if (= spender (last-item lineage))
+            ;; normal spend
             (helper-make-conditions mod-hash (get-spender-lineage lineage spender 0) outputs)
+            ;; clawback. was it by the admin?
             (if (= spender (f lineage))
+                ;; yes, normal spend (requires admin signature anyway, don't repeat the agg-sig-me condition)
                 (helper-make-conditions mod-hash (get-spender-lineage lineage spender 0) outputs)
-                (c (list AGG_SIG_ME (f lineage) (sha256tree1 outputs))  ;-;
+                ;; no, require admin signature
+                (c (list AGG_SIG_ME (f lineage) (sha256tree1 (list outputs extra-signers)))  ; no, require admin signature
                     (helper-make-conditions mod-hash (get-spender-lineage lineage spender 0) outputs)
                 )
             )
@@ -311,14 +311,13 @@
     )
 
     (main
-        ;; cache some stuff: output conditions, and lineage-proof-parameters
         (list mod-hash (sha256tree1 mod-hash) lineage (sha256tree1 lineage))
-        (list spender (sha256tree1 outputs))
-        (make-conditions mod-hash lineage spender outputs)
+        (list spender (sha256tree1 (list outputs extra-signers)))
+        (make-conditions mod-hash lineage spender outputs extra-signers)
+        extra-signers
         prev-coin-bundle
         this-coin-bundle
         next-coin-bundle
         prev-subtotal
-        extra-signers
     )
 )
