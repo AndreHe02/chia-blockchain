@@ -222,12 +222,14 @@
       )
     )
 
-    ;; no horizontal transfer for now
-    (defun get-spender-lineage (lineage spender)
+    (defun get-spender-lineage (lineage spender depth)
         (if lineage
-            (if (= (f lineage) spender)
-                (list )
-                (c (f lineage) (get-spender-lineage (r lineage) spender))
+            (if (> 2 depth)
+                (if (= (f lineage) spender)
+                    (list )
+                    (c (f lineage) (get-spender-lineage (r lineage) spender (+ depth 1)))
+                )
+                (x "not permitted to spend")
             )
             (x "invalid spender")
         )
@@ -240,12 +242,20 @@
         )
     )
 
+    (defun last-item (ls)
+        (if (r ls)
+            (last-item (r ls))
+            (f ls)
+        )
+    )
+
     (defun concat-after-list (ls1 ls2)
         (if ls1
             (c (f ls1) (concat-after-list (r ls1) ls2))
             ls2
         )
     )
+
 
     (defun helper-make-condition (mod-hash output-lineage amount)
         (list CREATE_COIN
@@ -269,7 +279,15 @@
     )
 
     (defun make-conditions (mod-hash lineage spender outputs)
-        (helper-make-conditions mod-hash (get-spender-lineage lineage spender) outputs)
+         (if (= spender (last-item lineage))  ; is normal spend or clawback?
+            (helper-make-conditions mod-hash (get-spender-lineage lineage spender 0) outputs) ; normal
+            (if (= spender (f lineage)) ; clawback. is by admin?
+                (helper-make-conditions mod-hash (get-spender-lineage lineage spender 0) outputs)
+                (c (list AGG_SIG_ME (f lineage) (sha256tree1 outputs))  ; no, require admin signature
+                    (helper-make-conditions mod-hash (get-spender-lineage lineage spender 0) outputs)
+                )
+            )
+        )
     )
 
     (main

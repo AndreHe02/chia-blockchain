@@ -344,12 +344,75 @@ class HCWallet:
 
         return used_coins
 
+    # to send a multisig (fixed signers) transaction,
+    # we package the coin spend solutions and ask the signers to sign it with their sk
+    async def generate_unsigned_transaction_msg(
+            self,
+            amounts: List[uint64],
+            receivers_: List[G1Element],
+            horizontal: List[bool],
+            from_puzzle_hash: bytes32,
+    ):
+        if from_puzzle_hash not in self.registered_lineages:
+            raise ValueError(f"Unrecognized puzzle hash {from_puzzle_hash}")
+
+        outgoing_amount = uint64(sum(amounts))
+        total_outgoing = outgoing_amount
+
+        selected_coins: Set[Coin] = await self.select_coins_for_ph(uint64(total_outgoing), from_puzzle_hash)
+
+        total_amount = sum([x.amount for x in selected_coins])
+        change = total_amount - total_outgoing
+
+        receivers = []
+        for r, h in zip(receivers_, horizontal):
+            if h:
+                receivers.append([r])
+            else:
+                receivers.append([self.public_key, r])
+
+        # this is to make a change coin with the same lineage as its parent
+        spender_index = 0
+        spent_coin_lineage = self.registered_lineages[from_puzzle_hash]
+        for i in range(len(spent_coin_lineage)):
+            if spent_coin_lineage[i] == self.public_key:
+                spender_index = i
+                break
+        change_coin_receiver = spent_coin_lineage[spender_index:]
+        receivers.append(change_coin_receiver)
+        amounts.append(change)
+
+        receivers_bundle: List[List[List[G1Element]]] = [[[self.public_key]] for coin in selected_coins]
+        amounts_bundle: List[List[uint64]] = [[coin.amount] for coin in selected_coins]
+        receivers_bundle[0] = receivers
+        amounts_bundle[0] = amounts
+
+        msgs = []
+        for r, a, c in zip(receivers_bundle, amounts_bundle, selected_coins):
+            outputs = Program.to(list(zip(r, a)))
+            msg = (
+                outputs.get_tree_hash()
+                + c.get_hash()
+                + self.wallet_state_manager.constants.AGG_SIG_ME_ADDITIONAL_DATA
+            )
+            msgs.append(msg)
+
+        return msgs, selected_coins
+
+    def sign_messages(self, msgs) -> List[G2Element]:
+        signatures = []
+        for msg in msgs:
+            signatures.append(AugSchemeMPL.sign(self.wallet_state_manager.private_key, msg))
+        return signatures
+
     async def generate_signed_transactions(
             self,
             amounts: List[uint64],
             receivers_: List[G1Element],
             horizontal: List[bool],
             from_puzzle_hash: bytes32,
+            extra_signers: List[G1Element] = [],
+            extra_signatures: List[G2Element] = [],
             fee: uint64 = uint64(0),
             coins: Set[Coin] = None,
             ignore_max_send_amount: bool = False,
@@ -359,7 +422,7 @@ class HCWallet:
             raise ValueError(f"Unrecognized puzzle hash {from_puzzle_hash}")
 
         outgoing_amount = uint64(sum(amounts))
-        total_outgoing = outgoing_amount + fee
+        total_outgoing = outgoing_amount #+ fee
 
         # change this to use XCH as fee later
         if not ignore_max_send_amount:
@@ -414,7 +477,8 @@ class HCWallet:
             self.wallet_state_manager.constants.AGG_SIG_ME_ADDITIONAL_DATA,
             spendable_hc_list,
             receivers_bundle,
-            amounts_bundle
+            amounts_bundle,
+            extra_signatures
         )
 
         # take the first one, mimicking cc_wallet

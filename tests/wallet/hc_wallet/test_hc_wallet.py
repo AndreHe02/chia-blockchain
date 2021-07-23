@@ -394,3 +394,41 @@ class TestHCWallet:
                                   [[pk3], [pk, pk2, pk3]],
                                   [10, 10]
                               ))
+
+        ''' WALLET 2 CLAWBACK '''
+        msgs, coins = await hc_wallet_2.generate_unsigned_transaction_msg(
+            [5], [pk2], [True], hc_puzzle_hash_for_lineage(HC_MOD, [pk, pk2, pk3])
+        )
+
+        # ask for admin signature
+        admin_signatures = hc_wallet.sign_messages(msgs)
+
+        tx_record = await hc_wallet_2.generate_signed_transactions(
+            [5], [pk2], [True], hc_puzzle_hash_for_lineage(HC_MOD, [pk, pk2, pk3]),
+            extra_signatures=admin_signatures, coins=coins
+        )
+
+        await wallet2.wallet_state_manager.add_pending_transaction(tx_record)
+        await time_out_assert(
+            15, tx_in_pool, True, full_node_api.full_node.mempool_manager, tx_record.spend_bundle.name()
+        )
+
+        for i in range(1, num_blocks):
+            await full_node_api.farm_new_transaction_block(FarmNewBlockProtocol(32 * b"0"))
+
+        await time_out_assert(15, hc_wallet.get_confirmed_balance,
+                              make_balance_by_lineage(
+                                  [[pk], [pk, pk2], [pk, pk2, pk3]],
+                                  [50, 35, 5]
+                              ))
+        await time_out_assert(15, hc_wallet_2.get_confirmed_balance,
+                              make_balance_by_lineage(
+                                  [[pk, pk2], [pk, pk2, pk3]],
+                                  [35, 5]
+                              ))
+        await time_out_assert(15, hc_wallet_3.get_confirmed_balance,
+                              make_balance_by_lineage(
+                                  [[pk3], [pk, pk2, pk3]],
+                                  [10, 5]
+                              ))
+
