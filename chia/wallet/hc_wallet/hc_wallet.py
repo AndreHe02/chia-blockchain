@@ -441,8 +441,8 @@ class HCWallet:
             signatures.append(AugSchemeMPL.sign(self.wallet_state_manager.private_key, msg))
         return signatures
 
+    @staticmethod
     def generate_signed_transaction(
-            self,
             coin_spends: List[CoinSpend],
             signatures: List[G2Element],
             extra_signatures: List[G2Element]
@@ -466,7 +466,7 @@ class HCWallet:
             spend_bundle=spend_bundle,
             additions=spend_bundle.additions(),
             removals=spend_bundle.removals(),
-            wallet_id=self.id(),
+            wallet_id=0,  # this is fine?
             sent_to=[],
             trade_id=None,
             type=uint32(TransactionType.OUTGOING_TX.value),

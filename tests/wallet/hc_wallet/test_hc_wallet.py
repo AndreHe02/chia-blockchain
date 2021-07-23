@@ -3,6 +3,7 @@ from collections import defaultdict
 from typing import List
 
 import pytest
+from blspy import AugSchemeMPL
 
 from chia.consensus.block_rewards import calculate_pool_reward, calculate_base_farmer_reward
 from chia.full_node.mempool_manager import MempoolManager
@@ -11,6 +12,7 @@ from chia.types.blockchain_format.program import Program
 from chia.types.blockchain_format.sized_bytes import bytes32
 from chia.types.peer_info import PeerInfo
 from chia.util.ints import uint16, uint32, uint64
+from chia.util.keychain import mnemonic_to_seed
 from chia.wallet.hc_wallet.hc_utils import hc_puzzle_hash_for_lineage_hash, hc_puzzle_for_lineage, \
     hc_puzzle_hash_for_lineage
 from chia.wallet.hc_wallet.hc_wallet import HCWallet
@@ -19,6 +21,11 @@ from chia.wallet.transaction_record import TransactionRecord
 from tests.setup_nodes import setup_simulators_and_wallets
 from tests.time_out_assert import time_out_assert
 
+def generate_test_keys(mnemonic):
+    seed = mnemonic_to_seed(mnemonic, "passphrase")
+    secret_key = AugSchemeMPL.key_gen(seed)
+    public_key = secret_key.get_g1()
+    return secret_key, public_key
 
 @pytest.fixture(scope="module")
 def event_loop():
@@ -403,7 +410,7 @@ class TestHCWallet:
         # ask for admin signature
         admin_signatures = hc_wallet.sign_messages(msgs)
 
-        tx_record = hc_wallet_2.generate_signed_transaction(
+        tx_record = HCWallet.generate_signed_transaction(
             coin_spends, signatures, admin_signatures
         )
 
@@ -506,14 +513,24 @@ class TestHCWallet:
         hc_wallet_3: HCWallet = await HCWallet.create(wallet_node_3.wallet_state_manager, wallet3)
         pk3 = hc_wallet_3.public_key
 
-        await hc_wallet.register_lineage([pk, pk2, pk3])
-        await hc_wallet_2.register_lineage([pk, pk2, pk3])
-        await hc_wallet_3.register_lineage([pk, pk2, pk3])
+        await hc_wallet.register_lineage([pk, pk3])
+        await hc_wallet_3.register_lineage([pk, pk3])
 
+        MNEMONIC1 = "mnemonic one"
+        MNEMONIC2 = "mnemonic two"
+        sk4, pk4 = generate_test_keys(MNEMONIC1)
+        sk5, pk5 = generate_test_keys(MNEMONIC2)
 
-        tx_record = await hc_wallet_2.generate_simple_transaction(
-            [20], [pk3], [True], hc_puzzle_hash_for_lineage(HC_MOD, [pk, pk2])
+        coin_spends, msgs, signatures = await hc_wallet_2.generate_unsigned_transaction(
+            [20], [pk3], [True], hc_puzzle_hash_for_lineage(HC_MOD, [pk, pk2]), [pk4, pk5]
         )
+        extra_signatures = []
+        for msg in msgs:
+            extra_signatures.append(AugSchemeMPL.sign(sk4, msg))
+            extra_signatures.append(AugSchemeMPL.sign(sk5, msg))
+
+        tx_record = HCWallet.generate_signed_transaction(coin_spends, signatures, extra_signatures)
+
         await wallet2.wallet_state_manager.add_pending_transaction(tx_record)
 
         await time_out_assert(
@@ -524,16 +541,16 @@ class TestHCWallet:
 
         await time_out_assert(15, hc_wallet.get_confirmed_balance,
                               make_balance_by_lineage(
-                                  [[pk], [pk, pk2], [pk, pk2, pk3]],
+                                  [[pk], [pk, pk2], [pk, pk3]],
                                   [50, 30, 20]
                               ))
         await time_out_assert(15, hc_wallet_2.get_confirmed_balance,
                               make_balance_by_lineage(
-                                  [[pk, pk2], [pk, pk2, pk3]],
-                                  [30, 20]
+                                  [[pk, pk2]],
+                                  [30]
                               ))
         await time_out_assert(15, hc_wallet_3.get_confirmed_balance,
                               make_balance_by_lineage(
-                                  [[pk, pk2, pk3]],
+                                  [[pk, pk3]],
                                   [20]
                               ))
