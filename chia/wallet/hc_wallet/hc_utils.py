@@ -46,14 +46,14 @@ def bundle_for_spendable_hc_list(spendable_hc: SpendableHC):
     return Program.to(coin)
 
 
-def spend_bundle_for_spendable_hcs(
+def unsigned_coin_spends(
         mod_code: Program,
         spender: G1Element,
         spendable_hc_list: List[SpendableHC],
         receivers: List[List[List[G1Element]]],
         amounts: List[List[uint64]],
-        sigs: Optional[List[G2Element]] = [],
-) -> SpendBundle:
+        extra_signers: Optional[List[G1Element]] = []
+):
     N = len(spendable_hc_list)
 
     if len(receivers) != N or len(amounts) != N:
@@ -92,6 +92,7 @@ def spend_bundle_for_spendable_hcs(
         solution = [
             spender,
             outputs,
+            extra_signers,
             prev_bundle,
             my_bundle,
             next_bundle,
@@ -100,34 +101,7 @@ def spend_bundle_for_spendable_hcs(
 
         coin_spend = CoinSpend(input_coins[index], puzzle_reveal, Program.to(solution))
         coin_spends.append(coin_spend)
-
-    if sigs is None or sigs == []:
-        return SpendBundle(coin_spends, NULL_SIGNATURE)
-    else:
-        return SpendBundle(coin_spends, AugSchemeMPL.aggregate(sigs))
-
-
-def signed_spend_bundle(
-        mod_code: Program,
-        spender: G1Element,
-        spender_sk: G1Element,
-        genesis_challenge,
-        spendable_hc_list: List[SpendableHC],
-        receivers: List[List[List[G1Element]]],
-        amounts: List[List[uint64]],
-        extra_signatures: List[G2Element] = []
-) -> SpendBundle:
-    signatures = []
-    for r, a, c in zip(receivers, amounts, spendable_hc_list):
-        outputs = Program.to(list(zip(r, a)))
-        msg = (
-            outputs.get_tree_hash()
-            + c.coin.get_hash()
-            + genesis_challenge
-        )
-        signatures.append(AugSchemeMPL.sign(spender_sk, msg))
-    signatures = signatures + extra_signatures
-    return spend_bundle_for_spendable_hcs(mod_code, spender, spendable_hc_list, receivers, amounts, signatures)
+    return coin_spends
 
 
 def is_hc_mod(inner_f: Program):
@@ -145,32 +119,3 @@ def uncurry_hc(puzzle: Program) -> Optional[Tuple[Program, Program]]:
     mod_hash, lineage = list(args.as_iter())
     return mod_hash, lineage
 
-
-def spendable_hc_list_from_coin_spend(coin_spend: CoinSpend, hash_to_puzzle_f) -> List[SpendableHC]:
-    spendable_hc_list = []
-
-    return
-    '''
-    This scheme doesn't work. for HC we don't pass in the same puzzle
-    that is curried. we give zip(receivers, amounts), it curries in lineage
-    '''
-
-    coin = coin_spend.coin
-    puzzle = Program.from_bytes(bytes(coin_spend.puzzle_reveal))
-    r = uncurry_hc(puzzle)
-    if r:
-        mod_hash, lineage = r
-    else:
-        raise ValueError("cannot uncurry for input coin")
-
-    for new_coin in coin_spend.additions():
-        puzzle = hash_to_puzzle_f(new_coin.puzzle_hash)
-        if puzzle is None:
-            print("unrecognized puzzle")
-            continue
-        r = uncurry_hc(puzzle)
-        if r is None:
-            print("cannot uncurry for output coin")
-            continue
-
-        mod_hash, lineage = r

@@ -4,6 +4,7 @@
       lineage                 ;; curried in
       spender
       outputs
+      extra-signers
       prev-coin-bundle        ;; used in this coin's announcement, prev-coin ASSERT_COIN_ANNOUNCEMENT will fail if wrong
       this-coin-bundle        ;; verified with ASSERT_MY_COIN_ID
       next-coin-bundle        ;; used to generate ASSERT_COIN_ANNOUNCEMENT
@@ -79,7 +80,6 @@
 
      ;;;;; end library code
 
-     ;; return the puzzle hash for a cc with the given `genesis-coin-checker-hash` & `inner-puzzle`
      (defun hc-puzzle-hash ((mod-hash mod-hash-hash lineage lineage-hash))
        (sha256tree_esc (curry mod-hash mod-hash-hash lineage-hash)
                        mod-hash
@@ -160,11 +160,14 @@
          prev-subtotal
          this-subtotal
          sig-parameters
+         extra-signers
          inner-conditions
          prev-coin-info
          this-coin-info
          next-coin-info
        )
+       (concat-after-list
+          (make-extra-agg-sig-conditions extra-signers (f (r sig-parameters)))
           (c (create-agg-sig-me sig-parameters)
                (c (create-assert-my-id this-coin-info)
                  (c (create-announcement-condition prev-coin-info prev-subtotal)
@@ -174,8 +177,18 @@
                  )
                )
           )
+        )
       )
 
+     (defun make-extra-agg-sig-conditions (extra-signers outputs)
+        (if extra-signers
+            (c
+                (list AGG_SIG_ME (f extra-signers) outputs)
+                (make-extra-agg-sig-conditions (r extra-signers) outputs)
+            )
+            ()
+        )
+     )
 
      (defun-inline is-lineage-proof-valid (
        lineage-proof-parameters coin-info)
@@ -194,6 +207,7 @@
          lineage-proof-parameters
          sig-parameters
          inner-conditions
+         extra-signers
          prev-coin-bundle
          this-coin-bundle
          next-coin-bundle
@@ -214,6 +228,7 @@
           ; the expression on the next line calculates `this-subtotal` by adding the delta to `prev-subtotal`
           (+ prev-subtotal (- (input-amount-for-coin this-coin-bundle) (output-totals inner-conditions)))
           sig-parameters
+          extra-signers
           inner-conditions
           prev-coin-bundle
           this-coin-bundle
@@ -229,9 +244,9 @@
                     (list )
                     (c (f lineage) (get-spender-lineage (r lineage) spender (+ depth 1)))
                 )
-                (x "not permitted to spend")
+                (x "not permitted to spend")    ;; third-hand owner (regular employee) is not permitted to spend
             )
-            (x "invalid spender")
+            (x "invalid spender")   ;; no such owner
         )
     )
 
@@ -279,10 +294,15 @@
     )
 
     (defun make-conditions (mod-hash lineage spender outputs)
-         (if (= spender (last-item lineage))  ; is normal spend or clawback?
-            (helper-make-conditions mod-hash (get-spender-lineage lineage spender 0) outputs) ; normal
-            (if (= spender (f lineage)) ; clawback. is by admin?
+         ;; is this a normal spend or clawback?
+         (if (= spender (last-item lineage))
+            ;; normal spend
+            (helper-make-conditions mod-hash (get-spender-lineage lineage spender 0) outputs)
+            ;; clawback. was it by the admin?
+            (if (= spender (f lineage))
+                ;; yes, normal spend (requires admin signature anyway, don't repeat the agg-sig-me condition)
                 (helper-make-conditions mod-hash (get-spender-lineage lineage spender 0) outputs)
+                ;; no, require admin signature
                 (c (list AGG_SIG_ME (f lineage) (sha256tree1 outputs))  ; no, require admin signature
                     (helper-make-conditions mod-hash (get-spender-lineage lineage spender 0) outputs)
                 )
@@ -291,10 +311,10 @@
     )
 
     (main
-        ;; cache some stuff: output conditions, and lineage-proof-parameters
         (list mod-hash (sha256tree1 mod-hash) lineage (sha256tree1 lineage))
         (list spender (sha256tree1 outputs))
         (make-conditions mod-hash lineage spender outputs)
+        extra-signers
         prev-coin-bundle
         this-coin-bundle
         next-coin-bundle

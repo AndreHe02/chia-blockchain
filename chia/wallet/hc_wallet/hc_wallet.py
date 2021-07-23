@@ -34,8 +34,8 @@ from chia.wallet.cc_wallet.cc_utils import (
     uncurry_cc,
 )
 from chia.wallet.derivation_record import DerivationRecord
-from chia.wallet.hc_wallet.hc_utils import hc_puzzle_hash_for_lineage_hash, spend_bundle_for_spendable_hcs, \
-    signed_spend_bundle, SpendableHC, hc_puzzle_hash_for_lineage
+from chia.wallet.hc_wallet.hc_utils import hc_puzzle_hash_for_lineage_hash, SpendableHC, hc_puzzle_hash_for_lineage, \
+    unsigned_coin_spends
 from chia.wallet.puzzles.genesis_by_coin_id_with_0 import (
     create_genesis_or_zero_coin_checker,
     genesis_coin_id_for_genesis_coin_checker,
@@ -214,7 +214,7 @@ class HCWallet:
         await self.register_lineage(genesis_lineage)
 
         tx_record: TransactionRecord = await self.standard_wallet.generate_signed_transaction(
-            amount, minted_hc_puzzle_hash, uint64(0), origin_id, coins
+            amount, minted_hc_puzzle_hash, uint64(0), coins=coins
         )
         assert tx_record.spend_bundle is not None
         return tx_record.spend_bundle
@@ -253,7 +253,7 @@ class HCWallet:
         spendable.sort(reverse=True, key=lambda record: record.coin.amount)
         if self.cost_of_single_tx is None:
             coin = spendable[0].coin
-            tx = await self.generate_signed_transactions(
+            tx = await self.generate_simple_transaction(
                 # this should be a fake spend to self
                 [coin.amount], [self.public_key], [False], puzzle_hash, coins={coin}, ignore_max_send_amount=True
             )
@@ -344,85 +344,27 @@ class HCWallet:
 
         return used_coins
 
-    # to send a multisig (fixed signers) transaction,
-    # we package the coin spend solutions and ask the signers to sign it with their sk
-    async def generate_unsigned_transaction_msg(
-            self,
-            amounts: List[uint64],
-            receivers_: List[G1Element],
-            horizontal: List[bool],
-            from_puzzle_hash: bytes32,
-    ):
-        if from_puzzle_hash not in self.registered_lineages:
-            raise ValueError(f"Unrecognized puzzle hash {from_puzzle_hash}")
-
-        outgoing_amount = uint64(sum(amounts))
-        total_outgoing = outgoing_amount
-
-        selected_coins: Set[Coin] = await self.select_coins_for_ph(uint64(total_outgoing), from_puzzle_hash)
-
-        total_amount = sum([x.amount for x in selected_coins])
-        change = total_amount - total_outgoing
-
-        receivers = []
-        for r, h in zip(receivers_, horizontal):
-            if h:
-                receivers.append([r])
-            else:
-                receivers.append([self.public_key, r])
-
-        # this is to make a change coin with the same lineage as its parent
-        spender_index = 0
-        spent_coin_lineage = self.registered_lineages[from_puzzle_hash]
-        for i in range(len(spent_coin_lineage)):
-            if spent_coin_lineage[i] == self.public_key:
-                spender_index = i
-                break
-        change_coin_receiver = spent_coin_lineage[spender_index:]
-        receivers.append(change_coin_receiver)
-        amounts.append(change)
-
-        receivers_bundle: List[List[List[G1Element]]] = [[[self.public_key]] for coin in selected_coins]
-        amounts_bundle: List[List[uint64]] = [[coin.amount] for coin in selected_coins]
-        receivers_bundle[0] = receivers
-        amounts_bundle[0] = amounts
-
-        msgs = []
-        for r, a, c in zip(receivers_bundle, amounts_bundle, selected_coins):
-            outputs = Program.to(list(zip(r, a)))
-            msg = (
-                outputs.get_tree_hash()
-                + c.get_hash()
-                + self.wallet_state_manager.constants.AGG_SIG_ME_ADDITIONAL_DATA
-            )
-            msgs.append(msg)
-
-        return msgs, selected_coins
-
-    def sign_messages(self, msgs) -> List[G2Element]:
-        signatures = []
-        for msg in msgs:
-            signatures.append(AugSchemeMPL.sign(self.wallet_state_manager.private_key, msg))
-        return signatures
-
-    async def generate_signed_transactions(
+    async def generate_unsigned_transaction(
             self,
             amounts: List[uint64],
             receivers_: List[G1Element],
             horizontal: List[bool],
             from_puzzle_hash: bytes32,
             extra_signers: List[G1Element] = [],
-            extra_signatures: List[G2Element] = [],
             fee: uint64 = uint64(0),
             coins: Set[Coin] = None,
             ignore_max_send_amount: bool = False,
-    ) -> TransactionRecord:
+    ):
+        """ We construct a list of coin spends and sign it ourselves,
+        returning (coin_spends, msgs, signatures). These can be used to
+        construct a valid spend bundle once signature from extra-signers
+        (and possibly admin, in the case of clawbacks) are obtained. """
 
         if from_puzzle_hash not in self.registered_lineages:
             raise ValueError(f"Unrecognized puzzle hash {from_puzzle_hash}")
 
         outgoing_amount = uint64(sum(amounts))
-        total_outgoing = outgoing_amount #+ fee
+        total_outgoing = outgoing_amount  # + fee
 
         # change this to use XCH as fee later
         if not ignore_max_send_amount:
@@ -470,17 +412,46 @@ class HCWallet:
                     self.registered_lineages[coin.puzzle_hash])
             )
 
-        spend_bundle = signed_spend_bundle(
+        coin_spends = unsigned_coin_spends(
             HC_MOD,
             self.public_key,
-            self.wallet_state_manager.private_key,
-            self.wallet_state_manager.constants.AGG_SIG_ME_ADDITIONAL_DATA,
             spendable_hc_list,
             receivers_bundle,
             amounts_bundle,
-            extra_signatures
+            extra_signers
         )
 
+        signatures = []
+        msgs = []
+        for r, a, c in zip(receivers_bundle, amounts_bundle, selected_coins):
+            outputs = Program.to(list(zip(r, a)))
+            msg = (
+                    outputs.get_tree_hash()
+                    + c.get_hash()
+                    + self.wallet_state_manager.constants.AGG_SIG_ME_ADDITIONAL_DATA
+            )
+            signatures.append(AugSchemeMPL.sign(self.wallet_state_manager.private_key, msg))
+            msgs.append(msg)
+
+        return coin_spends, msgs, signatures
+
+    def sign_messages(self, msgs) -> List[G2Element]:
+        signatures = []
+        for msg in msgs:
+            signatures.append(AugSchemeMPL.sign(self.wallet_state_manager.private_key, msg))
+        return signatures
+
+    def generate_signed_transaction(
+            self,
+            coin_spends: List[CoinSpend],
+            signatures: List[G2Element],
+            extra_signatures: List[G2Element]
+    ) -> TransactionRecord:
+
+        spend_bundle = SpendBundle(coin_spends,
+                                   AugSchemeMPL.aggregate(signatures + extra_signatures))
+
+        outgoing_amount = sum([coin.amount for coin in spend_bundle.removals()])
         # take the first one, mimicking cc_wallet
         to_puzzle_hash = spend_bundle.additions()[0].puzzle_hash
 
@@ -501,6 +472,22 @@ class HCWallet:
             type=uint32(TransactionType.OUTGOING_TX.value),
             name=spend_bundle.name(),
         )
+
+    # when no extra signers are required
+    async def generate_simple_transaction(
+            self,
+            amounts: List[uint64],
+            receivers_: List[G1Element],
+            horizontal: List[bool],
+            from_puzzle_hash: bytes32,
+            fee: uint64 = uint64(0),
+            coins: Set[Coin] = None,
+            ignore_max_send_amount: bool = False,
+    ):
+        coin_spends, msgs, signatures = \
+            await self.generate_unsigned_transaction(amounts, receivers_, horizontal, from_puzzle_hash,
+                                                     [], fee, coins, ignore_max_send_amount)
+        return self.generate_signed_transaction(coin_spends, signatures, [])
 
     def puzzle_for_pk(self, pubkey) -> Program:
         # this doesn't actually do anything
