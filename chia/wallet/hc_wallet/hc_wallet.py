@@ -421,12 +421,13 @@ class HCWallet:
             extra_signers
         )
 
+        # spender needs to sign outputs as well as the list of extra signers
         signatures = []
         msgs = []
         for r, a, c in zip(receivers_bundle, amounts_bundle, selected_coins):
-            outputs = Program.to(list(zip(r, a)))
+            outputs_and_extra_signers = Program.to([list(zip(r, a)), extra_signers])
             msg = (
-                    outputs.get_tree_hash()
+                    outputs_and_extra_signers.get_tree_hash()
                     + c.get_hash()
                     + self.wallet_state_manager.constants.AGG_SIG_ME_ADDITIONAL_DATA
             )

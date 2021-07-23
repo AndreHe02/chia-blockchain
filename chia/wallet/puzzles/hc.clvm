@@ -293,7 +293,7 @@
         )
     )
 
-    (defun make-conditions (mod-hash lineage spender outputs)
+    (defun make-conditions (mod-hash lineage spender outputs extra-signers)
          ;; is this a normal spend or clawback?
          (if (= spender (last-item lineage))
             ;; normal spend
@@ -303,7 +303,7 @@
                 ;; yes, normal spend (requires admin signature anyway, don't repeat the agg-sig-me condition)
                 (helper-make-conditions mod-hash (get-spender-lineage lineage spender 0) outputs)
                 ;; no, require admin signature
-                (c (list AGG_SIG_ME (f lineage) (sha256tree1 outputs))  ; no, require admin signature
+                (c (list AGG_SIG_ME (f lineage) (sha256tree1 (list outputs extra-signers)))  ; no, require admin signature
                     (helper-make-conditions mod-hash (get-spender-lineage lineage spender 0) outputs)
                 )
             )
@@ -312,8 +312,8 @@
 
     (main
         (list mod-hash (sha256tree1 mod-hash) lineage (sha256tree1 lineage))
-        (list spender (sha256tree1 outputs))
-        (make-conditions mod-hash lineage spender outputs)
+        (list spender (sha256tree1 (list outputs extra-signers)))
+        (make-conditions mod-hash lineage spender outputs extra-signers)
         extra-signers
         prev-coin-bundle
         this-coin-bundle
