@@ -285,6 +285,10 @@ class HCWallet:
 
         return total_amount
 
+    def puzzle_hash_to_lineage_fingerprints(self, puzzle_hash: bytes32):
+        assert puzzle_hash in self.registered_lineages
+        return [k.get_fingerprint() for k in self.registered_lineages[puzzle_hash]]
+
     async def get_hc_spendable_coins(self, records=None) -> List[WalletCoinRecord]:
         result: List[WalletCoinRecord] = []
 
@@ -298,12 +302,18 @@ class HCWallet:
 
         return result
 
+    async def get_spendable_balance(self, records=None) -> Dict[bytes32, uint64]:
+        balance = {}
+        for ph in self.registered_lineages:
+            balance[ph] = self.get_spendable_balance_for_ph(ph, records)
+        return balance
+
     async def get_spendable_coins_for_ph(self, puzzle_hash: bytes32, records=None) -> List[WalletCoinRecord]:
         all_spendable = await self.get_hc_spendable_coins(records)
         return [r for r in all_spendable if r.coin.puzzle_hash == puzzle_hash]
 
     async def get_spendable_balance_for_ph(self, puzzle_hash: bytes32, records=None) -> uint64:
-        coins = await self.get_spendable_coins_for_ph(puzzle_hash)
+        coins = await self.get_spendable_coins_for_ph(puzzle_hash, records)
         amount = 0
         for record in coins:
             amount += record.coin.amount

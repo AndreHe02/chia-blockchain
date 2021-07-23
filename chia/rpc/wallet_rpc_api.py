@@ -24,6 +24,7 @@ from chia.util.path import path_from_root
 from chia.util.ws_message import WsRpcMessage, create_payload_dict
 from chia.wallet.cc_wallet.cc_wallet import CCWallet
 from chia.wallet.derive_keys import master_sk_to_singleton_owner_sk
+from chia.wallet.hc_wallet.hc_wallet import HCWallet
 from chia.wallet.rl_wallet.rl_wallet import RLWallet
 from chia.wallet.derive_keys import master_sk_to_farmer_sk, master_sk_to_pool_sk, master_sk_to_wallet_sk
 from chia.wallet.did_wallet.did_wallet import DIDWallet
@@ -922,6 +923,100 @@ class WalletRpcApi:
             raise ValueError("Unable to decrypt the backup file.")
         backup_info = get_backup_info(file_path, sk)
         return {"backup_info": backup_info}
+
+    ##########################################################################################
+    # Hierarchical Coins: Transactions, Offers, and Clawbacks
+    ##########################################################################################
+
+    async def hc_create_wallet(self, request):
+        assert self.service.wallet_state_manager is not None
+        wallet_state_manager = self.service.wallet_state_manager
+        main_wallet = wallet_state_manager.main_wallet
+        host = request["host"]
+        async with self.service.wallet_state_manager.lock:
+            hc_wallet: HCWallet = await HCWallet.create(wallet_state_manager, main_wallet)
+            asyncio.create_task(self._create_backup_and_upload(host))
+        return {
+            "type": hc_wallet.type(),
+            "wallet_id": hc_wallet.id()
+        }
+
+    async def hc_genesis(self, request):
+        assert self.service.wallet_state_manager is not None
+        wallet_id = request["wallet_id"]
+        amount = request["amount"]
+        hc_wallet: HCWallet = self.service.wallet_state_manager.wallets[wallet_id]
+        assert hc_wallet.type == WalletType.HC_WALLET
+        async with self.service.wallet_state_manager.lock:
+            await hc_wallet.create_new_hc(amount)
+        return {}
+
+    async def hc_register_lineage(self, request):
+        assert self.service.wallet_state_manager is not None
+        wallet_id = uint32(int(request["wallet_id"]))
+        lineage_: List[str] = request["lineage"]
+        lineage: List[G1Element] = [G1Element.from_bytes(eval(_)) for _ in lineage_]
+        hc_wallet: HCWallet = self.service.wallet_state_manager.wallets[wallet_id]
+        assert hc_wallet.type == WalletType.HC_WALLET
+        async with self.service.wallet_state_manager.lock:
+            await hc_wallet.register_lineage(lineage)
+        return {}
+
+    async def hc_lineage_for_puzzle_hash(self, request):
+        assert self.service.wallet_state_manager is not None
+        wallet_id = uint32(int(request["wallet_id"]))
+        ph = bytes32(request["puzzle_hash"])
+        hc_wallet: HCWallet = self.service.wallet_state_manager.wallets[wallet_id]
+        assert hc_wallet.type == WalletType.HC_WALLET
+        async with self.service.wallet_state_manager.lock:
+            lineage_fingerprints = hc_wallet.puzzle_hash_to_lineage_fingerprints(ph)
+        return {
+            "wallet_id": wallet_id,
+            "lineage": lineage_fingerprints
+        }
+
+    async def hc_get_public_key(self, request):
+        assert self.service.wallet_state_manager is not None
+        wallet_id = uint32(int(request["wallet_id"]))
+        hc_wallet: HCWallet = self.service.wallet_state_manager.wallets[wallet_id]
+        assert hc_wallet.type == WalletType.HC_WALLET
+        async with self.service.wallet_state_manager.lock:
+            public_key = hc_wallet.public_key
+            fingerprint = public_key.get_fingerprint()
+        return {
+            "public_key": str(bytes(public_key)),
+            "fingerprint": fingerprint
+        }
+
+    async def hc_get_balance(self, request):
+        assert self.service.wallet_state_manager is not None
+        wallet_id = uint32(int(request["wallet_id"]))
+        hc_wallet: HCWallet = self.service.wallet_state_manager.wallets[wallet_id]
+        assert hc_wallet.type == WalletType.HC_WALLET
+        async with self.service.wallet_state_manager.lock:
+            unspent_records = await self.service.wallet_state_manager.coin_store.get_unspent_coins_for_wallet(wallet_id)
+            balance = await hc_wallet.get_confirmed_balance(unspent_records)
+            spendable_balance = await hc_wallet.get_spendable_balance(unspent_records)
+
+        wallet_balance = {
+            "wallet_id": wallet_id,
+            "confirmed_wallet_balance": balance,
+            "spendable_balance": spendable_balance
+        }
+        return {"wallet_balance": wallet_balance}
+
+    async def hc_send_transaction(self, request):
+        pass
+
+    async def hc_make_multisig_offer(self, request):
+        pass
+
+    async def hc_clawback(self, request):
+        pass
+
+    async def hc_sign_spends(self, request):
+        pass
+
 
     ##########################################################################################
     # Distributed Identities

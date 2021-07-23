@@ -15,7 +15,7 @@ from chia.wallet.hc_wallet.hc_utils import (
     HC_MOD,
     hc_puzzle_for_lineage_program,
     hc_puzzle_hash_for_lineage_hash,
-    spend_bundle_for_spendable_hcs, SpendableHC, signed_spend_bundle,
+    #spend_bundle_for_spendable_hcs, SpendableHC, signed_spend_bundle,
 )
 from chia.wallet.util.debug_spend_bundle import disassemble
 
@@ -266,11 +266,16 @@ def test_secondhand_clawback():
 
 
 def main():
-    print(HC_MOD)
-    test_spend_to_two()
-    test_secondhand_spend()
-    test_genesis_clawback()
-    test_secondhand_clawback()
+    sk, pk = generate_test_keys(MNEMONIC1)
+    hash = HC_MOD.get_tree_hash()
+    print(str(bytes(hash)))
+    print(
+        bytes32.from_bytes(bytes(hash)))
+
+    # test_spend_to_two()
+    # test_secondhand_spend()
+    # test_genesis_clawback()
+    # test_secondhand_clawback()
 
 
 if __name__ == "__main__":
